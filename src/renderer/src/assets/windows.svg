@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <!-- 高亮四宫格：四块四种鲜彩色，不透明渐变 + 顶部白色高光 -->
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#6EC0F7"/>
+      <stop offset="1" stop-color="#1E7BE0"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#7BE3A4"/>
+      <stop offset="1" stop-color="#22B15C"/>
+    </linearGradient>
+    <linearGradient id="lavender" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#C0A6F7"/>
+      <stop offset="1" stop-color="#7C50E0"/>
+    </linearGradient>
+    <linearGradient id="apricot" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFD37A"/>
+      <stop offset="1" stop-color="#F5921B"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="0.46" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <rect x="36" y="36" width="444" height="444" rx="64" fill="url(#blue)"/>
+    <rect x="36" y="36" width="444" height="444" rx="64" fill="url(#sheen)"/>
+    <rect x="36" y="36" width="444" height="444" rx="64" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+  <g>
+    <rect x="544" y="36" width="444" height="444" rx="64" fill="url(#green)"/>
+    <rect x="544" y="36" width="444" height="444" rx="64" fill="url(#sheen)"/>
+    <rect x="544" y="36" width="444" height="444" rx="64" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+  <g>
+    <rect x="36" y="544" width="444" height="444" rx="64" fill="url(#lavender)"/>
+    <rect x="36" y="544" width="444" height="444" rx="64" fill="url(#sheen)"/>
+    <rect x="36" y="544" width="444" height="444" rx="64" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+  <g>
+    <rect x="544" y="544" width="444" height="444" rx="64" fill="url(#apricot)"/>
+    <rect x="544" y="544" width="444" height="444" rx="64" fill="url(#sheen)"/>
+    <rect x="544" y="544" width="444" height="444" rx="64" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+</svg>
