@@ -41,6 +41,14 @@ interface AppInfo {
   iconFile: string
 }
 
+interface UninstallPlan {
+  kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
+  displayName: string
+  how: string
+  cmd: string
+  message: string
+}
+
 interface Progress {
   done: number
   total: number
@@ -123,6 +131,13 @@ function collectStore(): Record<string, string> {
     if (v !== null) out[k] = v
   }
   return out
+}
+
+/** ''、[]、{} 都算空值：磁盘上读到空值而本地已有内容时，认作那次落盘坏了，不拿空值覆盖本地 */
+function isEmptyStored(v: string | null): boolean {
+  if (v === null) return true
+  const t = v.trim()
+  return t === '' || t === '[]' || t === '{}'
 }
 
 const LAST_PAGE_KEY = 'launchapp-lastpage'
@@ -571,10 +586,11 @@ function App(): JSX.Element {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; view: View } | null>(null)
   const [infoApp, setInfoApp] = useState<AppInfo | null>(null)
   const [uninstallTarget, setUninstallTarget] = useState<AppInfo | null>(null)
-  const [uninstallResult, setUninstallResult] = useState<{ message: string; kind: string } | null>(
-    null
-  )
+  const [uninstallResult, setUninstallResult] = useState<
+    { ok?: boolean; message: string; kind: string } | null
+  >(null)
   const [uninstallBusy, setUninstallBusy] = useState(false)
+  const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null)
   const ctxRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const scannedRef = useRef(false)
@@ -599,7 +615,11 @@ function App(): JSX.Element {
         const file = await window.api.storeRead()
         if (cancelled) return
         if (file && Object.keys(file).length > 0) {
-          for (const [k, v] of Object.entries(file)) localStorage.setItem(k, v)
+          for (const [k, v] of Object.entries(file)) {
+            const prev = localStorage.getItem(k)
+            if (isEmptyStored(v) && !isEmptyStored(prev)) continue
+            localStorage.setItem(k, v)
+          }
           const s = loadSettings()
           setSettings(s)
           try {
@@ -938,11 +958,14 @@ function App(): JSX.Element {
     localStorage.setItem(LINKS_KEY, JSON.stringify(next))
   }, [])
 
-  const openLink = useCallback(async (l: WebLink): Promise<void> => {
-    const ok = await window.api.openLink(l.url)
-    if (!ok) setError(`无法打开 ${l.url}`)
-    else window.api.hideWindow()
-  }, [])
+  const openLink = useCallback(
+    async (l: WebLink): Promise<void> => {
+      const ok = await window.api.openLink(l.url, settings.linkBrowser || undefined)
+      if (!ok) setError(`无法打开 ${l.url}`)
+      else window.api.hideWindow()
+    },
+    [settings.linkBrowser]
+  )
 
   const activate = useCallback(
     (v: View): void => {
@@ -1325,6 +1348,34 @@ function App(): JSX.Element {
     [grid, folders, commitCells, commitFolders]
   )
 
+  /** 弹窗一打开就查卸载入口，把「将运行哪个卸载程序、依据什么找到它」先给用户看 */
+  useEffect(() => {
+    if (!uninstallTarget) {
+      setUninstallPlan(null)
+      return
+    }
+    let alive = true
+    setUninstallPlan(null)
+    window.api
+      .planUninstall(uninstallTarget)
+      .then((p) => {
+        if (alive) setUninstallPlan(p)
+      })
+      .catch((e: unknown) => {
+        if (!alive) return
+        setUninstallPlan({
+          kind: 'failed',
+          displayName: uninstallTarget.name,
+          how: '',
+          cmd: '',
+          message: `查找卸载入口失败：${e instanceof Error ? e.message : String(e)}`
+        })
+      })
+    return () => {
+      alive = false
+    }
+  }, [uninstallTarget])
+
   const removeOnly = useCallback(async (): Promise<void> => {
     if (!uninstallTarget) return
     const lnk = uninstallTarget.lnk
@@ -1611,6 +1662,11 @@ function App(): JSX.Element {
       </>
     )
   }
+
+  const planRunnable =
+    !!uninstallPlan && (uninstallPlan.kind === 'win32' || uninstallPlan.kind === 'local')
+  const resultDone =
+    !!uninstallResult && (uninstallResult.ok === true || uninstallResult.kind === 'removed')
 
   return (
     <div
@@ -2014,16 +2070,25 @@ function App(): JSX.Element {
             </header>
             {uninstallResult ? (
               <div className="uninstall-msg">{uninstallResult.message}</div>
+            ) : !uninstallPlan ? (
+              <div className="uninstall-msg">正在查找「{uninstallTarget.name}」的卸载程序…</div>
+            ) : planRunnable ? (
+              <>
+                <div className="uninstall-msg">
+                  这会调用该应用自己的卸载程序（不是只从启动器移除图标）。 卸载向导弹出后，请在其中完成确认。
+                </div>
+                <div className="uninstall-plan">
+                  <div className="up-how">{uninstallPlan.how}</div>
+                  <div className="up-cmd">{uninstallPlan.cmd}</div>
+                </div>
+              </>
             ) : (
-              <div className="uninstall-msg">
-                这会调用该应用自己的官方卸载程序（不是只从启动器移除图标）。
-                卸载向导弹出后，请在其中完成确认。
-              </div>
+              <div className="uninstall-msg">{uninstallPlan.message}</div>
             )}
             <div className="uninstall-actions">
               {uninstallResult ? (
                 <>
-                  {uninstallResult.kind === 'notfound' && (
+                  {!resultDone && (
                     <button className="set-button danger-btn" onClick={() => void removeOnly()}>
                       仅移除图标
                     </button>
@@ -2037,9 +2102,28 @@ function App(): JSX.Element {
                   <button className="set-button" disabled={uninstallBusy} onClick={() => setUninstallTarget(null)}>
                     取消
                   </button>
-                  <button className="set-button danger-btn" disabled={uninstallBusy} onClick={() => void confirmUninstall()}>
-                    {uninstallBusy ? '正在启动卸载程序…' : '确认卸载'}
-                  </button>
+                  {uninstallPlan?.kind === 'store' && (
+                    <button
+                      className="set-button"
+                      onClick={() => void window.api.openUninstallSettings()}
+                    >
+                      打开系统设置
+                    </button>
+                  )}
+                  {!planRunnable && (
+                    <button className="set-button" disabled={uninstallBusy} onClick={() => void removeOnly()}>
+                      仅移除图标
+                    </button>
+                  )}
+                  {planRunnable && (
+                    <button
+                      className="set-button danger-btn"
+                      disabled={uninstallBusy}
+                      onClick={() => void confirmUninstall()}
+                    >
+                      {uninstallBusy ? '正在启动卸载程序…' : '确认卸载'}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -2084,6 +2168,7 @@ function App(): JSX.Element {
           onResetOrder={resetOrder}
           scanning={scanning}
           links={links}
+          usedIcons={apps.map((a) => a.iconFile).filter(Boolean)}
           onDeleteLink={deleteLink}
           onEditLink={(l) => {
             setSettingsOpen(false)

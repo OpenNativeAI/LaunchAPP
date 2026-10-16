@@ -18,9 +18,24 @@ import { pathToFileURL } from 'url'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { scanApps, clearIconCache, getIconsDir, type AppInfo } from './scanner'
-import { uninstallApp, removeShortcut, type UninstallResult } from './uninstall'
+import { scanApps, clearIconCache, type AppInfo } from './scanner'
+import {
+  uninstallApp,
+  planUninstall,
+  removeShortcut,
+  openAppsSettings,
+  type UninstallPlan,
+  type UninstallResult
+} from './uninstall'
 import { fetchLinkMeta, normalizeUrl } from './links'
+import { detectBrowsers, openWithBrowser, type BrowserList } from './browsers'
+import {
+  createLayout,
+  migrateLegacyStorage,
+  readStore,
+  writeStore,
+  type DataLayout
+} from './store'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -39,88 +54,19 @@ if (!gotLock) {
   app.quit()
 }
 
+let layoutCache: DataLayout | null = null
+function L(): DataLayout {
+  if (!layoutCache) layoutCache = createLayout(app.getPath('userData'))
+  return layoutCache
+}
+
 function getDataDir(): string {
-  return join(app.getPath('userData'), 'data')
+  return L().dataDir
 }
 
-function getSettingsFile(): string {
-  return join(getDataDir(), 'launchapp-settings.json')
-}
-
-// ===== 网址(website)独立存储：data/website/ 下三个 jsonl =====
-function getWebsiteDir(): string {
-  return join(getDataDir(), 'website')
-}
-function getWebsiteFile(name: string): string {
-  return join(getWebsiteDir(), name)
-}
-/** 数组序列化为 JSON Lines（每行一个对象） */
-function toLines(rows: unknown[]): string {
-  return rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '')
-}
-/** 读取 JSON Lines，文件不存在返回空数组 */
-async function readJsonl(file: string): Promise<Record<string, unknown>[]> {
-  try {
-    const raw = await fs.readFile(file, 'utf8')
-    return raw
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as Record<string, unknown>)
-  } catch {
-    return []
-  }
-}
-/** 解析分类池键（{app,link}），异常时给空池 */
-function parseCats(raw?: string): { app: string[]; link: string[] } {
-  try {
-    const c = JSON.parse(raw || '{}') as Record<string, unknown>
-    return {
-      app: Array.isArray(c.app) ? (c.app as string[]) : [],
-      link: Array.isArray(c.link) ? (c.link as string[]) : []
-    }
-  } catch {
-    return { app: [], link: [] }
-  }
-}
-/** 解析条目分类映射（key -> 单个分类），异常时给空表 */
-function parseApptags(raw?: string): Record<string, string> {
-  try {
-    const v = JSON.parse(raw || '{}')
-    if (!v || typeof v !== 'object') return {}
-    const out: Record<string, string> = {}
-    for (const k of Object.keys(v)) if (typeof v[k] === 'string') out[k] = v[k]
-    return out
-  } catch {
-    return {}
-  }
-}
-
-/** 把旧的 userData 根目录下的自有数据迁移到 userData/data 子文件夹 */
-async function migrateLegacyStorage(): Promise<void> {
-  const ud = app.getPath('userData')
-  const dataDir = getDataDir()
-  await fs.mkdir(dataDir, { recursive: true })
-  const newJson = getSettingsFile()
-  try {
-    await fs.access(newJson)
-  } catch {
-    try {
-      await fs.rename(join(ud, 'launchapp-settings.json'), newJson)
-    } catch {
-      /* 无旧设置文件 */
-    }
-  }
-  const newIcons = join(dataDir, 'icons')
-  try {
-    await fs.access(newIcons)
-  } catch {
-    try {
-      await fs.rename(join(ud, 'icons'), newIcons)
-    } catch {
-      /* 无旧图标目录 */
-    }
-  }
+/** 坏文件留档处，分析里单独成一组，不混进网址数据 */
+function getRecoveryDir(): string {
+  return L().recoveryDir
 }
 
 async function captureWallpaper(): Promise<string> {
@@ -142,7 +88,7 @@ async function captureWallpaper(): Promise<string> {
 
 function splitArgs(input: string): string[] {
   const out: string[] = []
-  const re = /"([^"]*)"|(S+)/g
+  const re = /"([^"]*)"|(\S+)/g
   let m: RegExpExecArray | null
   while ((m = re.exec(input))) out.push(m[1] !== undefined ? m[1] : m[2])
   return out
@@ -207,6 +153,28 @@ async function dirStats(dir: string): Promise<{ count: number; size: number }> {
   return { count, size }
 }
 
+/** 递归统计目录下所有文件数量与总字节 */
+async function treeStats(dir: string): Promise<{ count: number; size: number }> {
+  let count = 0
+  let size = 0
+  try {
+    for (const e of await fs.readdir(dir, { withFileTypes: true })) {
+      const p2 = join(dir, e.name)
+      if (e.isDirectory()) {
+        const sub = await treeStats(p2)
+        count += sub.count
+        size += sub.size
+      } else if (e.isFile()) {
+        count += 1
+        size += await statSize(p2)
+      }
+    }
+  } catch {
+    /* 目录不存在时按 0 处理 */
+  }
+  return { count, size }
+}
+
 async function showWindow(): Promise<void> {
   if (!mainWindow) createWindow()
   if (!mainWindow) return
@@ -218,6 +186,14 @@ async function showWindow(): Promise<void> {
   mainWindow.webContents.send('window:shown')
   const wallpaper = await captureWallpaper()
   if (wallpaper) mainWindow.webContents.send('wallpaper', wallpaper)
+}
+
+function hideWindow(): void {
+  if (!mainWindow) return
+  // 先通知渲染层播放"收起"音效（窗口隐藏后渲染进程仍存活可发声）
+  mainWindow.webContents.send('window:hidden')
+  mainWindow.setAlwaysOnTop(false)
+  mainWindow.hide()
 }
 
 // uiohook 鼠标键编码：1 左 / 2 右 / 3 中 / 4 后退侧键 / 5 前进侧键
@@ -282,9 +258,7 @@ function stopMouseSummon(): void {
 
 function toggleSummon(): void {
   if (mainWindow && mainWindow.isVisible()) {
-    mainWindow.webContents.send('window:hidden')
-    mainWindow.setAlwaysOnTop(false)
-    mainWindow.hide()
+    hideWindow()
   } else {
     void showWindow()
   }
@@ -371,7 +345,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.launchapp')
-  await migrateLegacyStorage()
+  await migrateLegacyStorage(L())
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -380,7 +354,7 @@ app.whenReady().then(async () => {
   protocol.handle('appicon', async (request) => {
     const url = new URL(request.url)
     const name = decodeURIComponent(url.pathname.slice(1) || url.host)
-    const iconsDir = getIconsDir()
+    const iconsDir = L().iconsDir
     const file = join(iconsDir, name)
     if (!file.startsWith(iconsDir)) return new Response('forbidden', { status: 403 })
     return net.fetch(pathToFileURL(file).toString())
@@ -404,104 +378,56 @@ app.whenReady().then(async () => {
     (_e, info: AppInfo): Promise<UninstallResult> => uninstallApp(info.name, info.lnk)
   )
 
+  ipcMain.handle(
+    'apps:uninstall-plan',
+    (_e, info: AppInfo): Promise<UninstallPlan> => planUninstall(info.name, info.lnk)
+  )
+
   ipcMain.handle('apps:remove-shortcut', (_e, lnk: string): Promise<void> => removeShortcut(lnk))
+
+  ipcMain.handle('apps:open-uninstall-settings', (): Promise<void> => openAppsSettings())
 
   ipcMain.handle('links:fetch-meta', (_e, url: string) => fetchLinkMeta(url))
 
-  ipcMain.handle('links:open', async (_e, url: string): Promise<boolean> => {
-    const norm = normalizeUrl(url)
-    if (!norm) return false
-    await shell.openExternal(norm)
-    return true
+  let browserCache: BrowserList | null = null
+  const getBrowsers = async (): Promise<BrowserList> => {
+    if (!browserCache) browserCache = await detectBrowsers()
+    return browserCache
+  }
+
+  ipcMain.handle('browsers:list', () => getBrowsers())
+
+  ipcMain.handle('browsers:refresh', async (): Promise<BrowserList> => {
+    browserCache = await detectBrowsers()
+    return browserCache
   })
 
-  ipcMain.handle('store:read', async (): Promise<Record<string, string> | null> => {
-    try {
-      const raw = await fs.readFile(getSettingsFile(), 'utf8')
-      const obj = JSON.parse(raw) as Record<string, string>
-      // 把 website 文件夹里的网址数据重新合并回渲染层期望的键结构
-      const cats = parseCats(obj['launchapp-cats'])
-      const linkCats = (await readJsonl(getWebsiteFile('categories.jsonl')))
-        .map((r) => (typeof r.name === 'string' ? r.name : ''))
-        .filter(Boolean)
-      obj['launchapp-cats'] = JSON.stringify({ app: cats.app, link: linkCats })
-
-      const linkRows = await readJsonl(getWebsiteFile('links.jsonl'))
-      const logoRows = await readJsonl(getWebsiteFile('logos.jsonl'))
-      const logoMap: Record<string, string> = {}
-      for (const r of logoRows) if (typeof r.id === 'string') logoMap[r.id] = String(r.data ?? '')
-      const apptags = parseApptags(obj['launchapp-apptags'])
-      const links = linkRows.map((r) => ({
-        id: String(r.id ?? ''),
-        name: String(r.name ?? ''),
-        url: String(r.url ?? ''),
-        icon: logoMap[String(r.id ?? '')] || '',
-        plate: r.plate !== false
-      }))
-      for (const r of linkRows) {
-        const cat = typeof r.cat === 'string' ? r.cat : ''
-        if (cat && r.id) apptags['l:' + r.id] = cat
+  ipcMain.handle(
+    'links:open',
+    async (_e, url: string, browserKey?: string): Promise<boolean> => {
+      const norm = normalizeUrl(url)
+      if (!norm) return false
+      if (browserKey) {
+        const { browsers } = await getBrowsers()
+        const b = browsers.find((x) => x.key === browserKey)
+        if (b && (await openWithBrowser(b.exe, norm))) return true
       }
-      obj['launchapp-apptags'] = JSON.stringify(apptags)
-      obj['launchapp-links'] = JSON.stringify(links)
-      return obj
-    } catch {
-      return null
+      await shell.openExternal(norm)
+      return true
     }
-  })
+  )
 
-  ipcMain.handle('store:write', async (_e, data: Record<string, string>): Promise<boolean> => {
-    // 允许渲染层所有自有持久化键（launchapp-* 前缀），避免新增功能时白名单漏掉导致不落盘
-    const safe: Record<string, string> = {}
-    for (const [k, v] of Object.entries(data ?? {})) {
-      if (k.startsWith('launchapp-') && typeof v === 'string') safe[k] = v
-    }
-    // 网址数据分流到 data/website/ 的三个 jsonl，设置文件里不再保存
-    const cats = parseCats(safe['launchapp-cats'])
-    const apptags = parseApptags(safe['launchapp-apptags'])
-    let links: { id: string; name: string; url: string; icon: string; plate?: boolean }[] = []
-    try {
-      const parsed = JSON.parse(safe['launchapp-links'] || '[]')
-      if (Array.isArray(parsed)) links = parsed
-    } catch {
-      links = []
-    }
-    // 分类池 = 已声明池 ∪ 实际被条目使用的分类（自愈：只赋值未建池也不会漏写）
-    const linkPool = new Set(cats.link)
-    for (const l of links) {
-      const c = apptags['l:' + l.id]
-      if (c) linkPool.add(c)
-    }
-    const appPool = new Set(cats.app)
-    for (const k of Object.keys(apptags)) {
-      if (k.startsWith('a:') && apptags[k]) appPool.add(apptags[k])
-    }
-    // 设置文件：cats 只留 app 池，apptags 只留非 l: 键，去掉 links
-    safe['launchapp-cats'] = JSON.stringify({ app: [...appPool], link: [] })
-    const appTags: Record<string, string> = {}
-    for (const k of Object.keys(apptags)) if (!k.startsWith('l:')) appTags[k] = apptags[k]
-    safe['launchapp-apptags'] = JSON.stringify(appTags)
-    delete safe['launchapp-links']
+  ipcMain.handle('store:read', (): Promise<Record<string, string> | null> => readStore(L()))
 
-    const wdir = getWebsiteDir()
-    await fs.mkdir(wdir, { recursive: true })
-    const linkRows = links.map((l) => ({ id: l.id, name: l.name, url: l.url, cat: apptags['l:' + l.id] || '', plate: l.plate !== false }))
-    const logoRows = links.map((l) => ({ id: l.id, data: l.icon || '' })).filter((r) => r.data)
-    await fs.writeFile(getWebsiteFile('categories.jsonl'), toLines([...linkPool].map((n) => ({ name: n }))), 'utf8')
-    await fs.writeFile(getWebsiteFile('links.jsonl'), toLines(linkRows), 'utf8')
-    await fs.writeFile(getWebsiteFile('logos.jsonl'), toLines(logoRows), 'utf8')
-
-    const file = getSettingsFile()
-    await fs.mkdir(getDataDir(), { recursive: true })
-    await fs.writeFile(file + '.tmp', JSON.stringify(safe), 'utf8')
-    await fs.rename(file + '.tmp', file)
-    return true
-  })
+  ipcMain.handle(
+    'store:write',
+    (_e, data: Record<string, string>): Promise<boolean> => writeStore(L(), data)
+  )
 
   ipcMain.handle('storage:info', async () => {
     const dir = getDataDir()
-    const iconsDir = getIconsDir()
-    const settingsFile = getSettingsFile()
+    const iconsDir = L().iconsDir
+    const settingsFile = L().settingsFile
     const icons = await dirStats(iconsDir)
     return {
       dir,
@@ -513,17 +439,69 @@ app.whenReady().then(async () => {
     }
   })
 
-  ipcMain.handle('storage:open', async (_e, target: 'root' | 'icons'): Promise<string> => {
-    const dir = target === 'icons' ? getIconsDir() : getDataDir()
+  ipcMain.handle('storage:analyze', async (_e, referenced: unknown) => {
+    // 渲染层还没扫完应用列表时传 null：此时图标文件名不在手上，报孤儿会把全部缓存说成残留
+    const used = Array.isArray(referenced)
+      ? new Set(referenced.filter((x): x is string => typeof x === 'string'))
+      : null
+    const groups: { label: string; bytes: number; files: number }[] = []
+    const icons = await dirStats(L().iconsDir)
+    groups.push({ label: '应用图标缓存', bytes: icons.size, files: icons.count })
+    const appBytes = await statSize(L().appFile)
+    groups.push({ label: '应用排列数据', bytes: appBytes, files: appBytes > 0 ? 1 : 0 })
+    const site = await dirStats(L().websiteDir)
+    groups.push({ label: '网址数据', bytes: site.size, files: site.count })
+    const setBytes = await statSize(L().settingsFile)
+    groups.push({ label: '设置', bytes: setBytes, files: setBytes > 0 ? 1 : 0 })
+    const rec = await dirStats(getRecoveryDir())
+    if (rec.count > 0) groups.push({ label: '损坏留档', bytes: rec.size, files: rec.count })
+
+    const tree = await treeStats(getDataDir())
+    const knownBytes = groups.reduce((s, g) => s + g.bytes, 0)
+    const knownFiles = groups.reduce((s, g) => s + g.files, 0)
+    if (tree.size - knownBytes > 0) {
+      groups.push({
+        label: '其他',
+        bytes: tree.size - knownBytes,
+        files: Math.max(0, tree.count - knownFiles)
+      })
+    }
+
+    const orphan: string[] = []
+    let orphanBytes = 0
+    if (used) {
+      try {
+        const iconsDir = L().iconsDir
+        for (const e of await fs.readdir(iconsDir, { withFileTypes: true })) {
+          if (!e.isFile() || used.has(e.name)) continue
+          orphan.push(e.name)
+          orphanBytes += await statSize(join(iconsDir, e.name))
+        }
+      } catch {
+        /* 图标目录还没生成 */
+      }
+    }
+    orphan.sort()
+
+    return {
+      dir: getDataDir(),
+      total: tree.size,
+      files: tree.count,
+      groups: groups.sort((a, b) => b.bytes - a.bytes),
+      // null = 应用列表还没就绪，本次不做残留判定
+      orphans: used ? { count: orphan.length, bytes: orphanBytes, sample: orphan.slice(0, 6) } : null
+    }
+  })
+
+  ipcMain.handle('storage:open', async (_e, target: 'root' | 'icons' | 'recovered'): Promise<string> => {
+    const dir =
+      target === 'icons' ? L().iconsDir : target === 'recovered' ? getRecoveryDir() : getDataDir()
+    // 本窗口是全屏置顶的，不先收起就会盖住资源管理器
+    hideWindow()
     return shell.openPath(dir)
   })
 
-  ipcMain.on('window:hide', () => {
-    // 先通知渲染层播放"收起"音效（窗口隐藏后渲染进程仍存活可发声）
-    mainWindow?.webContents.send('window:hidden')
-    mainWindow?.setAlwaysOnTop(false)
-    mainWindow?.hide()
-  })
+  ipcMain.on('window:hide', hideWindow)
   ipcMain.on('app:quit', () => app.quit())
 
   ipcMain.handle('shortcut:set', (_e, accel: string | null) => {

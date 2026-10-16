@@ -39,6 +39,8 @@ export interface Settings {
   appSort: 'custom' | 'name'
   // 网址
   linksEnabled: boolean
+  /** 打开网址用的浏览器 key（来自系统识别到的浏览器列表）；'' = 跟随系统默认 */
+  linkBrowser: string
 }
 
 /** 用户自定义的网址（快捷方式） */
@@ -120,11 +122,13 @@ export const DEFAULT_SETTINGS: Settings = {
   soundEnabled: false,
   openSound: 'drop',
   closeSound: 'notify',
-  globalShortcut: 'CommandOrControl+Alt+L',
+  // 唤起方式默认用鼠标中键（全局钩子）；键盘组合随时可在设置里重新录制
+  globalShortcut: 'MouseMiddle',
   autoLaunch: false,
   hideSystemApps: false,
   appSort: 'custom',
-  linksEnabled: true
+  linksEnabled: true,
+  linkBrowser: ''
 }
 
 const KEY = 'launchapp-settings'
@@ -245,7 +249,8 @@ export function loadLinks(): WebLink[] {
         id: typeof x.id === 'string' ? x.id : `link-${i}`,
         name: x.name,
         url: x.url,
-        icon: typeof x.icon === 'string' ? x.icon : ''
+        icon: typeof x.icon === 'string' ? x.icon : '',
+        plate: x.plate !== false
       }))
   } catch {
     return []

@@ -1,8 +1,17 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 
+interface UninstallPlan {
+  /** win32=注册表里的卸载命令；local=应用自己目录里的卸载器；store=商店应用；notfound=确实查不到 */
+  kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
+  displayName: string
+  how: string
+  cmd: string
+  message: string
+}
+
 interface UninstallResult {
   ok: boolean
-  kind: 'win32' | 'store' | 'mssettings' | 'notfound' | 'failed'
+  kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
   message: string
 }
 
@@ -24,6 +33,17 @@ interface LinkMeta {
   reason: 'ok' | 'unreachable' | 'no-icon' | 'invalid'
 }
 
+interface BrowserInfo {
+  key: string
+  name: string
+  exe: string
+}
+
+interface BrowserList {
+  browsers: BrowserInfo[]
+  defaultKey: string
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -31,9 +51,13 @@ declare global {
       scanApps: (force?: boolean) => Promise<AppInfo[]>
       launchApp: (info: AppInfo) => Promise<boolean>
       uninstallApp: (info: AppInfo) => Promise<UninstallResult>
+      planUninstall: (info: AppInfo) => Promise<UninstallPlan>
       removeShortcut: (lnk: string) => Promise<void>
+      openUninstallSettings: () => Promise<void>
       fetchLinkMeta: (url: string) => Promise<LinkMeta>
-      openLink: (url: string) => Promise<boolean>
+      openLink: (url: string, browserKey?: string) => Promise<boolean>
+      listBrowsers: () => Promise<BrowserList>
+      refreshBrowsers: () => Promise<BrowserList>
       storeRead: () => Promise<Record<string, string> | null>
       storeWrite: (data: Record<string, string>) => Promise<boolean>
       storageInfo: () => Promise<{
@@ -44,7 +68,16 @@ declare global {
         iconsCount: number
         iconsSize: number
       }>
-      openStorage: (target: 'root' | 'icons') => Promise<string>
+      analyzeStorage: (
+        usedIcons: string[] | null
+      ) => Promise<{
+        dir: string
+        total: number
+        files: number
+        groups: { label: string; bytes: number; files: number }[]
+        orphans: { count: number; bytes: number; sample: string[] } | null
+      }>
+      openStorage: (target: 'root' | 'icons' | 'recovered') => Promise<string>
       hideWindow: () => void
       quitApp: () => void
       setShortcut: (accel: string | null) => Promise<boolean>

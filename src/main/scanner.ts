@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { spawn } from 'child_process'
 import { promises as fs } from 'fs'
 import { join } from 'path'
+import { createLayout } from './store'
 
 export interface AppInfo {
   id: string
@@ -173,7 +174,7 @@ Write-Output 'DONE'
 `
 
 export function getIconsDir(): string {
-  return join(app.getPath('userData'), 'data', 'icons')
+  return createLayout(app.getPath('userData')).iconsDir
 }
 
 function runScript(

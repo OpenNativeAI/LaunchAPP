@@ -12,6 +12,8 @@ import {
 
 declare const __APP_VERSION__: string
 
+const BG_COLOR_OPTIONS = BG_COLOR_PRESETS.map((c) => ({ ...c, color: c.value }))
+
 const AUTHOR = '（待填写作者名）'
 
 interface Props {
@@ -24,6 +26,8 @@ interface Props {
   links: WebLink[]
   onDeleteLink: (id: string) => void
   onEditLink: (link: WebLink) => void
+  /** 当前所有应用图标缓存文件名，用于分析失效图标 */
+  usedIcons: string[]
 }
 
 function Slider({
@@ -63,19 +67,21 @@ function Slider({
   )
 }
 
-function Dropdown({
+function Dropdown<T extends string | number>({
   label,
   value,
   options,
   onChange
 }: {
   label: string
-  value: number
-  options: { value: number; text: string }[]
-  onChange: (v: number) => void
+  value: T
+  options: { value: T; text: string; color?: string }[]
+  onChange: (v: T) => void
 }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [up, setUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -92,17 +98,27 @@ function Dropdown({
       <span className="set-label">{label}</span>
       <div className="dropdown" ref={ref}>
         <button
+          ref={btnRef}
           type="button"
           className={`dropdown-btn${open ? ' open' : ''}`}
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            const box = btnRef.current?.getBoundingClientRect()
+            if (box) setUp(window.innerHeight - box.bottom < 250 && box.top > 250)
+            setOpen((o) => !o)
+          }}
         >
-          <span>{current ? current.text : value}</span>
+          <span className="dropdown-cur">
+            {current?.color && (
+              <span className="dropdown-dot" style={{ background: current.color }} />
+            )}
+            <span>{current ? current.text : String(value)}</span>
+          </span>
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4">
             <path d="m6 9 6 6 6-6" />
           </svg>
         </button>
         {open && (
-          <div className="dropdown-menu">
+          <div className={`dropdown-menu${up ? ' up' : ''}`}>
             {options.map((o) => (
               <button
                 key={o.value}
@@ -113,6 +129,7 @@ function Dropdown({
                   onChange(o.value)
                 }}
               >
+                {o.color && <span className="dropdown-dot" style={{ background: o.color }} />}
                 {o.text}
               </button>
             ))}
@@ -120,6 +137,57 @@ function Dropdown({
         )}
       </div>
     </div>
+  )
+}
+
+type BrowserList = Awaited<ReturnType<typeof window.api.listBrowsers>>
+
+/** 打开网址用哪个浏览器：默认跟随系统，也可手动指定计算机上已装的浏览器 */
+function LinkBrowserRow({
+  value,
+  onChange
+}: {
+  value: string
+  onChange: (v: string) => void
+}): JSX.Element {
+  const [info, setInfo] = useState<BrowserList | null>(null)
+  const [err, setErr] = useState('')
+
+  const load = (refresh: boolean): void => {
+    setErr('')
+    const p = refresh ? window.api.refreshBrowsers() : window.api.listBrowsers()
+    p.then((d) => setInfo(d)).catch((e) => setErr('识别本机浏览器失败：' + String(e)))
+  }
+
+  useEffect(() => {
+    load(false)
+  }, [])
+
+  const defaultName = info?.browsers.find((b) => b.key === info.defaultKey)?.name || ''
+  const options = [{ value: '', text: defaultName ? `系统默认（${defaultName}）` : '系统默认' }].concat(
+    (info?.browsers || []).map((b) => ({ value: b.key, text: b.name }))
+  )
+  const stale = Boolean(info && value && !info.browsers.some((b) => b.key === value))
+
+  return (
+    <>
+      <Dropdown
+        label="打开网址使用"
+        value={value}
+        options={options}
+        onChange={onChange}
+      />
+      <div className="set-row">
+        <span className="set-label">
+          {info ? `已识别到 ${info.browsers.length} 个浏览器` : '正在识别本机浏览器…'}
+        </span>
+        <button className="set-button small" onClick={() => load(true)}>
+          重新识别
+        </button>
+      </div>
+      {err && <div className="set-hint">{err}</div>}
+      {stale && <div className="set-hint">上次选择的浏览器已卸载，将改用系统默认浏览器。</div>}
+    </>
   )
 }
 
@@ -142,62 +210,6 @@ function Toggle({
       >
         <span className="knob" />
       </button>
-    </div>
-  )
-}
-
-function Segmented<T extends string>({
-  label,
-  value,
-  options,
-  onChange
-}: {
-  label: string
-  value: T
-  options: { value: T; text: string }[]
-  onChange: (v: T) => void
-}): JSX.Element {
-  return (
-    <div className="set-row">
-      <span className="set-label">{label}</span>
-      <div className="segmented">
-        {options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            className={`seg${o.value === value ? ' active' : ''}`}
-            onClick={() => onChange(o.value)}
-          >
-            {o.text}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function ColorSwatches({
-  value,
-  onChange
-}: {
-  value: string
-  onChange: (v: string) => void
-}): JSX.Element {
-  return (
-    <div className="set-row">
-      <span className="set-label">背景颜色</span>
-      <div className="swatches">
-        {BG_COLOR_PRESETS.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            className={`swatch${c.value === value ? ' active' : ''}`}
-            style={{ background: c.value }}
-            title={c.text}
-            onClick={() => onChange(c.value)}
-          />
-        ))}
-      </div>
     </div>
   )
 }
@@ -307,9 +319,28 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-function StorageSection(): JSX.Element {
+type StorageAnalysis = Awaited<ReturnType<typeof window.api.analyzeStorage>>
+
+function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
   const [info, setInfo] = useState<StorageInfo | null>(null)
+  const [analysis, setAnalysis] = useState<StorageAnalysis | null>(null)
+  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // 只在点“分析”时读一次，避免 apps 变化触发重复分析
+  const usedRef = useRef(usedIcons)
+  usedRef.current = usedIcons
+
+  const analyze = (): void => {
+    setBusy(true)
+    setErr('')
+    // 应用列表还没扫出来时传 null：主进程手上没有图标文件名，此时判定会把整份缓存说成残留
+    const used = usedRef.current.length > 0 ? usedRef.current : null
+    window.api
+      .analyzeStorage(used)
+      .then(setAnalysis)
+      .catch((e) => setErr('分析失败：' + String(e)))
+      .finally(() => setBusy(false))
+  }
 
   useEffect(() => {
     let alive = true
@@ -317,12 +348,13 @@ function StorageSection(): JSX.Element {
       .storageInfo()
       .then((d) => alive && setInfo(d))
       .catch((e) => alive && setErr(String(e)))
+    analyze()
     return () => {
       alive = false
     }
   }, [])
 
-  const open = (target: 'root' | 'icons'): void => {
+  const open = (target: 'root' | 'icons' | 'recovered'): void => {
     window.api
       .openStorage(target)
       .then((msg) => {
@@ -353,6 +385,59 @@ function StorageSection(): JSX.Element {
           {info.iconsCount} 个文件 · {formatBytes(info.iconsSize)}
         </div>
       )}
+      <div className="set-row">
+        <span className="set-label">占用分析</span>
+        <button className="set-button small" onClick={analyze} disabled={busy}>
+          {busy ? '分析中…' : '重新分析'}
+        </button>
+      </div>
+      {analysis && (
+        <div className="sa">
+          <div className="sa-total">
+            共 {formatBytes(analysis.total)} · {analysis.files} 个文件
+          </div>
+          {analysis.groups.map((g) => (
+            <div className="sa-row" key={g.label}>
+              <span className="sa-label">{g.label}</span>
+              <span className="sa-bar">
+                <span
+                  className="sa-fill"
+                  style={{
+                    width: Math.max(1.5, analysis.total ? (g.bytes / analysis.total) * 100 : 0) + '%'
+                  }}
+                />
+              </span>
+              <span className="sa-size">
+                {formatBytes(g.bytes)}
+                {g.files > 1 ? ' · ' + g.files + ' 个' : ''}
+              </span>
+            </div>
+          ))}
+          {analysis.orphans === null ? (
+            <div className="set-hint">应用列表还在扫描，本次不判定残留图标；扫完后再点重新分析。</div>
+          ) : (
+            analysis.orphans.count > 0 && (
+              <div className="set-hint">
+                {analysis.orphans.count} 个图标缓存（{formatBytes(analysis.orphans.bytes)}
+                ）当前没有任何应用在用，通常是应用已卸载或改名后留下的残留文件。
+              </div>
+            )
+          )}
+        </div>
+      )}
+      {analysis && analysis.groups.some((g) => g.label === '损坏留档') && (
+        <>
+          <div className="set-hint">
+            有存储文件坏掉或被清空过，原件已改名留档，不会自动删除，可以打开核对。
+          </div>
+          <div className="set-row">
+            <span className="set-label">损坏留档</span>
+            <button className="set-button small" onClick={() => open('recovered')}>
+              打开文件夹
+            </button>
+          </div>
+        </>
+      )}
     </>
   )
 }
@@ -366,7 +451,8 @@ export default function SettingsPanel({
   scanning,
   links,
   onDeleteLink,
-  onEditLink
+  onEditLink,
+  usedIcons
 }: Props): JSX.Element {
   const [tab, setTab] = useState<TabId>('appearance')
 
@@ -409,7 +495,7 @@ export default function SettingsPanel({
           <div className="settings-scroll">
             {tab === 'appearance' && (
               <>
-                <Segmented
+                <Dropdown
                   label="背景样式"
                   value={settings.bgStyle}
                   options={[
@@ -419,12 +505,14 @@ export default function SettingsPanel({
                   onChange={(v) => onChange({ bgStyle: v })}
                 />
                 {settings.bgStyle === 'solid' && (
-                  <ColorSwatches
+                  <Dropdown
+                    label="背景颜色"
                     value={settings.bgColor}
+                    options={BG_COLOR_OPTIONS}
                     onChange={(v) => onChange({ bgColor: v })}
                   />
                 )}
-                <Segmented
+                <Dropdown
                   label="图标形状"
                   value={settings.iconShape}
                   options={[
@@ -517,7 +605,7 @@ export default function SettingsPanel({
                   }))}
                   onChange={(v) => onChange({ rows: v, autoGrid: false })}
                 />
-                <Segmented
+                <Dropdown
                   label="页码指示器"
                   value={settings.indicator}
                   options={[
@@ -588,13 +676,13 @@ export default function SettingsPanel({
                 />
                 {settings.soundEnabled && (
                   <>
-                    <Segmented
+                    <Dropdown
                       label="出现时"
                       value={settings.openSound}
                       options={SOUND_OPTIONS}
                       onChange={(v) => onChange({ openSound: v })}
                     />
-                    <Segmented
+                    <Dropdown
                       label="关闭时"
                       value={settings.closeSound}
                       options={SOUND_OPTIONS}
@@ -617,7 +705,7 @@ export default function SettingsPanel({
                   onChange={(v) => onChange({ autoLaunch: v })}
                 />
                 <div className="set-hint">
-                  提示：托盘图标常驻，左键点击或按全局快捷键唤起，右键菜单可退出程序。
+                  提示：托盘图标常驻，左键点击托盘或按上面的唤起键（默认鼠标中键）打开，右键菜单可退出程序。
                   按 Esc 只关闭设置页，再按一次才隐藏窗口。
                   全局快捷键支持键盘组合键，也支持单独的鼠标键（中键 / 侧键；鼠标键不能搭配修饰键）。
                 </div>
@@ -626,7 +714,7 @@ export default function SettingsPanel({
 
             {tab === 'apps' && (
               <>
-                <Segmented
+                <Dropdown
                   label="应用排序方式"
                   value={settings.appSort}
                   options={[
@@ -671,6 +759,10 @@ export default function SettingsPanel({
                   checked={settings.linksEnabled}
                   onChange={(v) => onChange({ linksEnabled: v })}
                 />
+                <LinkBrowserRow
+                  value={settings.linkBrowser}
+                  onChange={(v) => onChange({ linkBrowser: v })}
+                />
                 <div className="set-hint">网址与应用各自独立管理，统一汇集在本设置面板中。</div>
                 {links.length === 0 ? (
                   <div className="set-hint">还没有网址。切到“网址”视图，点击“+”即可添加。</div>
@@ -703,7 +795,7 @@ export default function SettingsPanel({
               </>
             )}
 
-            {tab === 'storage' && <StorageSection />}
+            {tab === 'storage' && <StorageSection usedIcons={usedIcons} />}
 
             {tab === 'about' && (
               <>

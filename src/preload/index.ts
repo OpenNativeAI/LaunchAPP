@@ -11,10 +11,29 @@ export interface AppInfo {
   iconFile: string
 }
 
+export interface UninstallPlan {
+  kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
+  displayName: string
+  how: string
+  cmd: string
+  message: string
+}
+
 export interface UninstallResult {
   ok: boolean
-  kind: 'win32' | 'store' | 'mssettings' | 'notfound' | 'failed'
+  kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
   message: string
+}
+
+export interface BrowserInfo {
+  key: string
+  name: string
+  exe: string
+}
+
+export interface BrowserList {
+  browsers: BrowserInfo[]
+  defaultKey: string
 }
 
 export interface LinkMeta {
@@ -34,19 +53,37 @@ export interface StorageInfo {
   iconsSize: number
 }
 
+export interface StorageAnalysis {
+  dir: string
+  total: number
+  files: number
+  groups: { label: string; bytes: number; files: number }[]
+  /** null = 应用列表未就绪，本次没有做残留判定 */
+  orphans: { count: number; bytes: number; sample: string[] } | null
+}
+
 const api = {
   scanApps: (force = false): Promise<AppInfo[]> => ipcRenderer.invoke('apps:scan', force),
   launchApp: (info: AppInfo): Promise<boolean> => ipcRenderer.invoke('apps:launch', info),
   uninstallApp: (info: AppInfo): Promise<UninstallResult> =>
     ipcRenderer.invoke('apps:uninstall', info),
+  planUninstall: (info: AppInfo): Promise<UninstallPlan> =>
+    ipcRenderer.invoke('apps:uninstall-plan', info),
   removeShortcut: (lnk: string): Promise<void> => ipcRenderer.invoke('apps:remove-shortcut', lnk),
+  openUninstallSettings: (): Promise<void> =>
+    ipcRenderer.invoke('apps:open-uninstall-settings'),
   fetchLinkMeta: (url: string): Promise<LinkMeta> => ipcRenderer.invoke('links:fetch-meta', url),
-  openLink: (url: string): Promise<boolean> => ipcRenderer.invoke('links:open', url),
+  openLink: (url: string, browserKey?: string): Promise<boolean> =>
+    ipcRenderer.invoke('links:open', url, browserKey),
+  listBrowsers: (): Promise<BrowserList> => ipcRenderer.invoke('browsers:list'),
+  refreshBrowsers: (): Promise<BrowserList> => ipcRenderer.invoke('browsers:refresh'),
   storeRead: (): Promise<Record<string, string> | null> => ipcRenderer.invoke('store:read'),
   storeWrite: (data: Record<string, string>): Promise<boolean> =>
     ipcRenderer.invoke('store:write', data),
   storageInfo: (): Promise<StorageInfo> => ipcRenderer.invoke('storage:info'),
-  openStorage: (target: 'root' | 'icons'): Promise<string> =>
+  analyzeStorage: (usedIcons: string[] | null): Promise<StorageAnalysis> =>
+    ipcRenderer.invoke('storage:analyze', usedIcons),
+  openStorage: (target: 'root' | 'icons' | 'recovered'): Promise<string> =>
     ipcRenderer.invoke('storage:open', target),
   hideWindow: (): void => ipcRenderer.send('window:hide'),
   quitApp: (): void => ipcRenderer.send('app:quit'),
