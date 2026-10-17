@@ -3,6 +3,7 @@ import { spawn } from 'child_process'
 import { promises as fs } from 'fs'
 import { join } from 'path'
 import { createLayout } from './store'
+import { t } from '../shared/i18n'
 
 export interface AppInfo {
   id: string
@@ -211,7 +212,7 @@ function runScript(
     child.on('error', reject)
     child.on('close', (code) => {
       if (code === 0) resolve()
-      else reject(new Error(stderr.trim() || `扫描脚本退出码 ${code}`))
+      else reject(new Error(stderr.trim() || t('scanExitCode', { code: code ?? '?' })))
     })
   })
 }

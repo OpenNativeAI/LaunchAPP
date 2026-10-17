@@ -346,8 +346,8 @@ body,
 
 .settings-card {
   display: flex;
-  width: min(940px, 92vw);
-  height: min(700px, 90vh);
+  width: min(1180px, 94vw);
+  height: min(880px, 92vh);
   border-radius: 16px;
   overflow: hidden;
   background: #262628;
@@ -1352,7 +1352,7 @@ body,
 
 .sa-label {
   flex: none;
-  width: 92px;
+  width: 108px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.62);
   white-space: nowrap;
@@ -1383,6 +1383,34 @@ body,
   font-size: 12px;
   color: rgba(255, 255, 255, 0.45);
   font-variant-numeric: tabular-nums;
+}
+
+.sa-sub {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.sa-file {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11.5px;
+}
+
+.sa-file .sa-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.sa-file .sa-size {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.42);
 }
 
 /* ===== 添加网址：Logo 预览可点击上传 ===== */

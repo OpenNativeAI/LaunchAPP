@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX, DragEvent } from 'react'
+import { t } from './i18n'
 
 export interface DockApp {
   lnk: string
@@ -98,7 +99,7 @@ export default function Dock({
         if (lnk) onDropApp(lnk)
       }}
     >
-      {items.length === 0 && <div className="dock-empty">拖拽应用到此处收藏</div>}
+      {items.length === 0 && <div className="dock-empty">{t('dockEmpty')}</div>}
       {items.map((a, i) => {
         // 拖拽期间 mousemove 不再触发，放大镜会冻结在旧位置造成错位，故拖拽中一律原始尺寸
         const s = dragIdx !== null || draggingLnk !== null ? 1 : scaleFor(i)
@@ -127,7 +128,7 @@ export default function Dock({
               className="dock-icon"
               src={`appicon:///${a.iconFile}`}
               alt={a.name}
-              title={`${a.name}（拖动排序，右键菜单）`}
+              title={t('dockTooltip', { name: a.name })}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData('application/x-dock-index', String(i))

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import type { WebLink } from './settings'
+import { t } from './i18n'
 
 interface Props {
   /** 传入则为编辑，否则为新增 */
@@ -32,9 +33,9 @@ function genId(): string {
 }
 
 const REASON_HINT: Record<string, string> = {
-  unreachable: '无法访问该网站（网络受限或被屏蔽），请点上方虚线框手动上传 Logo',
-  'no-icon': '该网站未提供可识别的图标，请手动上传 Logo',
-  invalid: '网址无效'
+  unreachable: 'hintUnreachable',
+  'no-icon': 'hintNoIcon',
+  invalid: 'reasonInvalid'
 }
 
 export default function AddLinkModal({ initial, categories, initialCat, onClose, onSave }: Props): JSX.Element {
@@ -82,7 +83,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
     if (!norm || norm === lastFetched.current) return
     setLoading(true)
     const reqId = ++reqRef.current
-    const t = window.setTimeout(async () => {
+    const timer = window.setTimeout(async () => {
       try {
         const meta = await window.api.fetchLinkMeta(norm)
         if (reqId !== reqRef.current) return
@@ -91,16 +92,16 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
           setIcon(meta.icon)
           setAutoHint('')
         } else {
-          setAutoHint(REASON_HINT[meta.reason] || '自动识别失败，请手动上传 Logo')
+          setAutoHint(REASON_HINT[meta.reason] || 'hintAutoFail')
         }
         if (!nameTouched.current) setName(meta.title || meta.host || '')
       } catch {
-        if (reqId === reqRef.current) setAutoHint('自动识别失败，请手动上传 Logo')
+        if (reqId === reqRef.current) setAutoHint('hintAutoFail')
       } finally {
         if (reqId === reqRef.current) setLoading(false)
       }
     }, 600)
-    return () => window.clearTimeout(t)
+    return () => window.clearTimeout(timer)
   }, [url, iconSource])
 
   useEffect(() => {
@@ -142,11 +143,11 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
           setIcon(meta.icon)
           setAutoHint('')
         } else {
-          setAutoHint(REASON_HINT[meta.reason] || '自动识别失败，请手动上传 Logo')
+          setAutoHint(REASON_HINT[meta.reason] || 'hintAutoFail')
         }
         if (!nameTouched.current) setName(meta.title || meta.host || '')
       } catch {
-        if (reqId === reqRef.current) setAutoHint('自动识别失败，请手动上传 Logo')
+        if (reqId === reqRef.current) setAutoHint('hintAutoFail')
       } finally {
         if (reqId === reqRef.current) setLoading(false)
       }
@@ -156,7 +157,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
   const submit = (): void => {
     const finalUrl = normalize(url)
     if (!finalUrl) {
-      setErr('请输入有效的网址，例如 example.com')
+      setErr('errInvalidUrl')
       return
     }
     const finalName = name.trim() || new URL(finalUrl).hostname
@@ -170,8 +171,8 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
     <div className="info-mask" onMouseDown={onClose}>
       <div className="link-modal" onMouseDown={(e) => e.stopPropagation()}>
         <header className="info-head">
-          <h3>{initial ? '编辑网址' : '添加网址'}</h3>
-          <button className="settings-close" onClick={onClose} title="关闭 (Esc)">
+          <h3>{t(initial ? 'linkEditTitle' : 'linkAddTitle')}</h3>
+          <button className="settings-close" onClick={onClose} title={t('closeEsc')}>
             ✕
           </button>
         </header>
@@ -181,7 +182,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
             <button
               type="button"
               className="link-icon-btn"
-              title="点击上传 Logo"
+              title={t('uploadLogo')}
               onClick={() => fileRef.current?.click()}
             >
               {loading && !icon ? (
@@ -201,10 +202,10 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
                 className={`set-button small${iconSource === 'auto' ? ' active' : ''}`}
                 onClick={useAuto}
               >
-                自动识别
+                {t('autoDetect')}
               </button>
             </div>
-            {autoHint && <div className="link-auto-hint">{autoHint}</div>}
+            {autoHint && <div className="link-auto-hint">{t(autoHint)}</div>}
             <input
               ref={fileRef}
               type="file"
@@ -216,7 +217,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
 
           <div className="link-fields">
             <label className="field">
-              <span>网址</span>
+              <span>{t('fieldUrl')}</span>
               <input
                 ref={urlRef}
                 value={url}
@@ -229,10 +230,10 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
               />
             </label>
             <label className="field">
-              <span>名称</span>
+              <span>{t('fieldName')}</span>
               <input
                 value={name}
-                placeholder="留空则自动识别网站标题"
+                placeholder={t('namePlaceholder')}
                 spellCheck={false}
                 onChange={(e) => {
                   nameTouched.current = true
@@ -241,10 +242,10 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
               />
             </label>
             <div className="link-cat">
-              <span className="link-cat-label">分类</span>
+              <span className="link-cat-label">{t('category')}</span>
               <div className={'dd dd-block' + (catOpen ? ' dd-open' : '')} ref={catRef}>
                 <button type="button" className="dd-trigger" onClick={() => setCatOpen((o) => !o)}>
-                  <span className="dd-label">{cat || '未分类'}</span>
+                  <span className="dd-label">{cat || t('uncategorized')}</span>
                   <svg
                     className="dd-arrow"
                     width="12"
@@ -267,7 +268,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
                         setCatOpen(false)
                       }}
                     >
-                      未分类
+                      {t('uncategorized')}
                     </button>
                     {categories.map((c) => (
                       <button
@@ -287,7 +288,7 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
               </div>
             </div>
             <div className="set-row plate-row">
-              <span className="set-label">白色底板</span>
+              <span className="set-label">{t('whitePlate')}</span>
               <button
                 type="button"
                 className={`switch${plate ? ' on' : ''}`}
@@ -296,16 +297,16 @@ export default function AddLinkModal({ initial, categories, initialCat, onClose,
                 <span className="knob" />
               </button>
             </div>
-            {err && <div className="link-error">{err}</div>}
+            {err && <div className="link-error">{t(err)}</div>}
           </div>
         </div>
 
         <div className="uninstall-actions">
           <button className="set-button" onClick={onClose}>
-            取消
+            {t('cancel')}
           </button>
           <button className="set-button active-btn" onClick={submit}>
-            {initial ? '保存' : '添加'}
+            {t(initial ? 'save' : 'add')}
           </button>
         </div>
       </div>

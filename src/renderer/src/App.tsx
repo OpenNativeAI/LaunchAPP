@@ -3,6 +3,7 @@ import type { CSSProperties, JSX } from 'react'
 import SettingsPanel from './SettingsPanel'
 import Dock, { type DockApp } from './Dock'
 import AddLinkModal from './AddLinkModal'
+import { t, setLang } from './i18n'
 import dropSoundUrl from './assets/voice/drop.wav'
 import notifySoundUrl from './assets/voice/notify.wav'
 import {
@@ -10,6 +11,8 @@ import {
   saveSettings,
   loadLinks,
   LINKS_KEY,
+  GRID_KEY,
+  FOLDERS_KEY,
   ICON_RADIUS,
   loadGrid,
   saveGrid,
@@ -19,6 +22,8 @@ import {
   saveItemCat,
   loadCategories,
   saveCategories,
+  loadHidden,
+  saveHidden,
   refKey,
   cellKey,
   displayShortcut,
@@ -30,6 +35,7 @@ import {
   type Ref,
   type Folder
 } from './settings'
+import { getStore, setStore, clearStore, flushNow } from './persist'
 
 interface AppInfo {
   id: string
@@ -110,34 +116,6 @@ function playSound(id: string): void {
   src.connect(gain)
   gain.connect(ctx.destination)
   src.start()
-}
-
-const STORE_KEYS = [
-  'launchapp-settings',
-  'launchapp-order',
-  'launchapp-dock',
-  'launchapp-lastpage',
-  'launchapp-links',
-  'launchapp-grid',
-  'launchapp-folders',
-  'launchapp-apptags',
-  'launchapp-cats'
-]
-
-function collectStore(): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const k of STORE_KEYS) {
-    const v = localStorage.getItem(k)
-    if (v !== null) out[k] = v
-  }
-  return out
-}
-
-/** ''、[]、{} 都算空值：磁盘上读到空值而本地已有内容时，认作那次落盘坏了，不拿空值覆盖本地 */
-function isEmptyStored(v: string | null): boolean {
-  if (v === null) return true
-  const t = v.trim()
-  return t === '' || t === '[]' || t === '{}'
 }
 
 const LAST_PAGE_KEY = 'launchapp-lastpage'
@@ -275,7 +253,7 @@ const GridTile = memo(function GridTile({
   const title = isFolder
     ? view.name
     : draggable
-      ? view.name + '（拖动调整位置，拖到另一个上停一下可合并）'
+      ? view.name + t('dragHint')
       : view.name
   return (
     <button
@@ -382,7 +360,7 @@ function Dropdown({
   return (
     <div className={'dd' + (open ? ' dd-open' : '')} ref={rootRef}>
       <button type="button" className="dd-trigger" onClick={() => setOpen((o) => !o)}>
-        <span className="dd-label">{cur ? cur.label : ''}</span>
+        <span className="dd-label">{cur ? t(cur.label) : ''}</span>
         <svg
           className="dd-arrow"
           width="12"
@@ -407,7 +385,7 @@ function Dropdown({
                 setOpen(false)
               }}
             >
-              {o.label}
+              {t(o.label)}
             </button>
           ))}
         </div>
@@ -445,16 +423,16 @@ function TagEditor({
     <div className="folder-mask" onMouseDown={onClose}>
       <div className="tag-pop" onMouseDown={(e) => e.stopPropagation()}>
         <header className="tag-pop-title">
-          <span>分类 · {name}</span>
-          <button className="settings-close" onClick={onClose} title="关闭 (Esc)">
+          <span>{t('catOf', { name })}</span>
+          <button className="settings-close" onClick={onClose} title={t('closeEsc')}>
             ✕
           </button>
         </header>
         <div className="tag-field">
-          <div className="tag-field-label">归属分类</div>
+          <div className="tag-field-label">{t('assignedCat')}</div>
           <Dropdown
             value={current}
-            options={[{ value: '', label: '未分类' }].concat(
+            options={[{ value: '', label: t('uncategorized') }].concat(
               tags.map((t) => ({ value: t, label: t }))
             )}
             onChange={onAssign}
@@ -462,11 +440,11 @@ function TagEditor({
         </div>
         <div className="tag-manage">
           <div className="tag-manage-head">
-            <span className="tag-field-label">分类管理</span>
+            <span className="tag-field-label">{t('catManage')}</span>
             <button
               type="button"
               className="tag-add-btn"
-              title="新建分类"
+              title={t('newCategory')}
               onClick={() => setAdding(true)}
             >
               <svg
@@ -487,7 +465,7 @@ function TagEditor({
                 className="tag-pop-input"
                 autoFocus
                 value={draft}
-                placeholder="新分类名称"
+                placeholder={t('newCatPlaceholder')}
                 spellCheck={false}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -499,7 +477,7 @@ function TagEditor({
                 }}
               />
               <button className="set-button small" onClick={submit}>
-                确定
+                {t('ok')}
               </button>
               <button
                 className="tag-pop-cancel"
@@ -508,22 +486,22 @@ function TagEditor({
                   setDraft('')
                 }}
               >
-                取消
+                {t('cancel')}
               </button>
             </div>
           )}
           {tags.length === 0 && !adding && (
-            <div className="tag-pop-empty">还没有分类，点右侧 + 新建。</div>
+            <div className="tag-pop-empty">{t('noCatsHint')}</div>
           )}
           <div className="tag-mgmt-list">
-            {tags.map((t) => (
-              <div key={t} className="tag-mgmt-item">
-                <span className="tag-mgmt-name">{t}</span>
+            {tags.map((c) => (
+              <div key={c} className="tag-mgmt-item">
+                <span className="tag-mgmt-name">{c}</span>
                 <button
                   type="button"
                   className="tag-mgmt-del"
-                  title="删除该分类"
-                  onClick={() => onDelete(t)}
+                  title={t('deleteCategory')}
+                  onClick={() => onDelete(c)}
                 >
                   ✕
                 </button>
@@ -542,9 +520,11 @@ function App(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [settings, setSettings] = useState<Settings>(loadSettings)
+  // 先于子组件渲染同步语言，切语言时整棵界面立刻跟着变
+  setLang(settings.language)
   const [dockLnks, setDockLnks] = useState<string[]>(() => {
     try {
-      const v = JSON.parse(localStorage.getItem(DOCK_KEY) || '[]')
+      const v = JSON.parse(getStore(DOCK_KEY) || '[]')
       return Array.isArray(v) ? v : []
     } catch {
       return []
@@ -552,7 +532,7 @@ function App(): JSX.Element {
   })
   const [order, setOrder] = useState<string[]>(() => {
     try {
-      const v = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]')
+      const v = JSON.parse(getStore(ORDER_KEY) || '[]')
       return Array.isArray(v) ? v : []
     } catch {
       return []
@@ -563,6 +543,7 @@ function App(): JSX.Element {
   const [folders, setFolders] = useState<Folder[]>(() => loadFolders())
   const [itemCat, setItemCat] = useState<Record<string, string>>(() => loadItemCat())
   const [cats, setCats] = useState<CategoryPools>(() => loadCategories())
+  const [hiddenLnks, setHiddenLnks] = useState<string[]>(() => loadHidden())
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [tagEdit, setTagEdit] = useState<{ key: string; name: string } | null>(null)
   const [openFolder, setOpenFolder] = useState<FolderView | null>(null)
@@ -577,7 +558,7 @@ function App(): JSX.Element {
   const [page, setPageRaw] = useState(() => {
     const s = loadSettings()
     if (!s.rememberPage) return 0
-    const saved = parseInt(localStorage.getItem(LAST_PAGE_KEY) || '0', 10)
+    const saved = parseInt(getStore(LAST_PAGE_KEY) || '0', 10)
     return Number.isFinite(saved) ? saved : 0
   })
   const [wallpaper, setWallpaper] = useState('')
@@ -592,71 +573,39 @@ function App(): JSX.Element {
   const [uninstallBusy, setUninstallBusy] = useState(false)
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(null)
   const ctxRef = useRef<HTMLDivElement>(null)
-  const searchRef = useRef<HTMLInputElement>(null)
   const scannedRef = useRef(false)
+  /** 本次扫描走后台静默：有缓存可看时不再遮挡整屏 */
+  const silentScanRef = useRef(false)
   const { cols, rows } = useGridLayout(settings)
   const pageSize = cols * rows
 
   const setPage = useCallback((updater: number | ((p: number) => number)): void => {
     setPageRaw((prev) => {
       const next = typeof updater === 'function' ? updater(prev) : updater
-      localStorage.setItem(LAST_PAGE_KEY, String(next))
+      setStore(LAST_PAGE_KEY, String(next))
       return next
     })
   }, [])
 
-  const hydratedRef = useRef(false)
-
-  // 启动时从 userData 的 JSON 文件水合设置；文件为空则把旧 localStorage 迁移过去
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const file = await window.api.storeRead()
-        if (cancelled) return
-        if (file && Object.keys(file).length > 0) {
-          for (const [k, v] of Object.entries(file)) {
-            const prev = localStorage.getItem(k)
-            if (isEmptyStored(v) && !isEmptyStored(prev)) continue
-            localStorage.setItem(k, v)
-          }
-          const s = loadSettings()
-          setSettings(s)
-          try {
-            const o = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]')
-            if (Array.isArray(o)) setOrder(o.map(String))
-            const d = JSON.parse(localStorage.getItem(DOCK_KEY) || '[]')
-            if (Array.isArray(d)) setDockLnks(d.map(String))
-            setLinks(loadLinks())
-            setGrid(loadGrid())
-            setFolders(loadFolders())
-            setItemCat(loadItemCat())
-            setCats(loadCategories())
-          } catch { /* 损坏则维持现状 */ }
-          // 仅在开启"记住页码"时才恢复上次页码，否则始终从第 0 页开始
-          if (s.rememberPage) {
-            const pg = parseInt(localStorage.getItem(LAST_PAGE_KEY) || '0', 10)
-            if (Number.isFinite(pg)) setPageRaw(pg)
-          }
-        } else {
-          await window.api.storeWrite(collectStore())
-        }
-      } catch { /* 读文件失败则继续用 localStorage */ }
-      if (!cancelled) hydratedRef.current = true
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  // 任一持久化项变化后，防抖写入 userData 文件
-  useEffect(() => {
-    if (!hydratedRef.current) return
-    const t = window.setTimeout(() => {
-      void window.api.storeWrite(collectStore())
-    }, 300)
-    return () => window.clearTimeout(t)
-  }, [settings, order, dockLnks, page, links, grid, folders, itemCat, cats])
+  // 用户主动翻页（滚轮/方向键/滑动/页码点击）：仅当页码真的变了才播翻页音效
+  const turnPage = useCallback(
+    (dir: number): void => {
+      const cur = safePageRef.current
+      const target = Math.min(Math.max(cur + dir, 0), (pageCountRef.current || 1) - 1)
+      if (target === cur) return
+      setPage(target)
+      if (settings.soundEnabled && settings.pageSound) playSound(settings.pageSound)
+    },
+    [settings.soundEnabled, settings.pageSound, setPage]
+  )
+  const gotoPage = useCallback(
+    (p: number): void => {
+      if (p === safePageRef.current) return
+      setPage(p)
+      if (settings.soundEnabled && settings.pageSound) playSound(settings.pageSound)
+    },
+    [settings.soundEnabled, settings.pageSound, setPage]
+  )
 
   const patchSettings = useCallback((patch: Partial<Settings>): void => {
     setSettings((prev) => {
@@ -666,40 +615,63 @@ function App(): JSX.Element {
     })
   }, [])
 
-  const startScan = useCallback(async (force = false): Promise<void> => {
+  const startScan = useCallback(async (force = false, silent = false): Promise<void> => {
     setError(null)
-    setProgress({ done: 0, total: 0 })
+    silentScanRef.current = silent
+    if (!silent) setProgress({ done: 0, total: 0 })
     try {
       const list = await window.api.scanApps(force)
       setApps(list)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      silentScanRef.current = false
       setProgress(null)
     }
   }, [])
 
   useEffect(() => {
-    const off = window.api.onScanProgress(setProgress)
+    const off = window.api.onScanProgress((p) => {
+      // 静默重扫时不接进度，否则又会把图标挡住
+      if (silentScanRef.current) return
+      setProgress(p)
+    })
     window.api.onWallpaper((dataUrl) => {
       if (dataUrl) setWallpaper(dataUrl)
     })
     window.api.onRescan(() => startScan(true))
     if (!scannedRef.current) {
       scannedRef.current = true
-      startScan()
+      // 先铺上次的扫描结果（几乎瞬间就有图标），再在后台静默重扫校正
+      void window.api
+        .cachedApps()
+        .then((cached) => {
+          if (cached.length > 0) setApps(cached)
+          return cached.length > 0
+        })
+        .catch(() => false)
+        .then((hadCache) => startScan(false, hadCache))
     }
     return off
   }, [startScan])
 
-  // 窗口重新唤起时按设置重新聚焦搜索框（input 的 autoFocus 仅在首次挂载生效）
+  // 窗口唤起时播放"启动"音效（搜索框不再自动聚焦，保持低调，只有鼠标点击时才亮）
   useEffect(() => {
     const off = window.api.onWindowShown(() => {
-      if (settings.autoFocusSearch) searchRef.current?.focus()
       if (settings.soundEnabled && settings.openSound) playSound(settings.openSound)
     })
     return off
-  }, [settings.autoFocusSearch, settings.soundEnabled, settings.openSound])
+  }, [settings.soundEnabled, settings.openSound])
+
+  // 收起窗口就意味着用户可能马上退出，先把没落盘的改动写进 userData
+  useEffect(() => {
+    const off = window.api.onWindowHidden(flushNow)
+    window.addEventListener('beforeunload', flushNow)
+    return () => {
+      off()
+      window.removeEventListener('beforeunload', flushNow)
+    }
+  }, [])
 
   // 界面收起时播放音效
   useEffect(() => {
@@ -714,7 +686,12 @@ function App(): JSX.Element {
     if (!settings.soundEnabled) return
     if (settings.openSound) preloadSound(settings.openSound)
     if (settings.closeSound) preloadSound(settings.closeSound)
-  }, [settings.soundEnabled, settings.openSound, settings.closeSound])
+    if (settings.pageSound) preloadSound(settings.pageSound)
+  }, [settings.soundEnabled, settings.openSound, settings.closeSound, settings.pageSound])
+
+  useEffect(() => {
+    window.api.setUiLang(settings.language).catch(() => undefined)
+  }, [settings.language])
 
   useEffect(() => {
     window.api
@@ -724,8 +701,8 @@ function App(): JSX.Element {
           const label = displayShortcut(settings.globalShortcut)
           setError(
             isMouseAccelerator(settings.globalShortcut)
-              ? `鼠标键「${label}」注册失败：全局鼠标钩子未能启动（可能被安全软件拦截或原生模块未加载）`
-              : `快捷键 ${label} 注册失败，可能与其他程序冲突`
+              ? t('errMouseShortcut', { label })
+              : t('errKeyShortcut', { label })
           )
         }
       })
@@ -790,12 +767,25 @@ function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [query, settingsOpen, ctxMenu, openFolder, addLink.open, uninstallTarget, dismiss])
 
+  // "仅移除图标"的隐藏集合：命中的快捷方式不显示，但磁盘 .lnk 原封不动
+  const hiddenSet = useMemo(() => new Set(hiddenLnks), [hiddenLnks])
+
+  // 供设置面板管理：当前处于隐藏状态的应用（保留图标与名称便于恢复）
+  const hiddenApps = useMemo(
+    () =>
+      apps
+        .filter((a) => hiddenSet.has(a.lnk))
+        .map((a) => ({ lnk: a.lnk, name: a.name, iconFile: a.iconFile })),
+    [apps, hiddenSet]
+  )
+
   // 派生统一网格视图（应用 + 网址 + 文件夹），grid 为空时从 order/links 迁移
   const views = useMemo<View[]>(() => {
     const appMap = new Map(apps.map((a) => [a.lnk, a]))
     const linkMap = new Map(links.map((l) => [l.id, l]))
     const folderMap = new Map(folders.map((f) => [f.id, f]))
-    const hidden = (a: AppInfo): boolean => settings.hideSystemApps && isSystemApp(a)
+    const hidden = (a: AppInfo): boolean =>
+      hiddenSet.has(a.lnk) || (settings.hideSystemApps && isSystemApp(a))
     const resolveRef = (r: Ref): LeafView | null => {
       if (r.k === 'app') {
         const a = appMap.get(r.id)
@@ -865,7 +855,7 @@ function App(): JSX.Element {
     }
     if (settings.linksEnabled) links.forEach(pushLink)
     return out
-  }, [apps, links, folders, grid, order, settings.hideSystemApps, settings.appSort, settings.linksEnabled])
+  }, [apps, links, folders, grid, order, settings.hideSystemApps, settings.appSort, settings.linksEnabled, hiddenSet])
 
   const viewsRef = useRef(views)
   viewsRef.current = views
@@ -876,7 +866,7 @@ function App(): JSX.Element {
     if (!q) return null
     const out: LeafView[] = []
     for (const a of apps) {
-      if (settings.hideSystemApps && isSystemApp(a)) continue
+      if (hiddenSet.has(a.lnk) || (settings.hideSystemApps && isSystemApp(a))) continue
       if (a.name.toLowerCase().includes(q) || a.target.toLowerCase().includes(q)) out.push(appViewOf(a))
     }
     if (settings.linksEnabled) {
@@ -885,7 +875,7 @@ function App(): JSX.Element {
       }
     }
     return out
-  }, [query, apps, links, settings.hideSystemApps, settings.linksEnabled])
+  }, [query, apps, links, settings.hideSystemApps, settings.linksEnabled, hiddenSet])
 
   const renderList: View[] = searchViews ?? views
   // 分类名按视图独立派生：应用用 a: 前缀条目，网址用 l: 前缀条目
@@ -920,21 +910,21 @@ function App(): JSX.Element {
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
       if (!settings.wheelPaging || settingsOpen) return
-      if (e.deltaY > 30) setPage((p) => Math.min(p + 1, pageCount - 1))
-      else if (e.deltaY < -30) setPage((p) => Math.max(p - 1, 0))
+      if (e.deltaY > 30) turnPage(1)
+      else if (e.deltaY < -30) turnPage(-1)
     },
-    [pageCount, settings.wheelPaging, settingsOpen, setPage]
+    [settings.wheelPaging, settingsOpen, turnPage]
   )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (settingsOpen || openFolder || query) return
-      if (e.key === 'ArrowRight') setPage((p) => Math.min(p + 1, pageCount - 1))
-      if (e.key === 'ArrowLeft') setPage((p) => Math.max(p - 1, 0))
+      if (e.key === 'ArrowRight') turnPage(1)
+      if (e.key === 'ArrowLeft') turnPage(-1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [pageCount, settingsOpen, openFolder, query, setPage])
+  }, [settingsOpen, openFolder, query, turnPage])
 
   const launch = useCallback(async (info: AppInfo): Promise<void> => {
     setLaunchedId(info.id)
@@ -942,7 +932,9 @@ function App(): JSX.Element {
       window.api.hideWindow()
       await window.api.launchApp(info)
     } catch (e) {
-      setError(`无法启动 ${info.name}：${e instanceof Error ? e.message : String(e)}`)
+      setError(
+        t('errLaunch', { name: info.name, msg: e instanceof Error ? e.message : String(e) })
+      )
     } finally {
       setTimeout(() => setLaunchedId(null), 600)
     }
@@ -950,18 +942,18 @@ function App(): JSX.Element {
 
   const commitDock = useCallback((next: string[]): void => {
     setDockLnks(next)
-    localStorage.setItem(DOCK_KEY, JSON.stringify(next))
+    setStore(DOCK_KEY, JSON.stringify(next))
   }, [])
 
   const commitLinks = useCallback((next: WebLink[]): void => {
     setLinks(next)
-    localStorage.setItem(LINKS_KEY, JSON.stringify(next))
+    setStore(LINKS_KEY, JSON.stringify(next))
   }, [])
 
   const openLink = useCallback(
     async (l: WebLink): Promise<void> => {
       const ok = await window.api.openLink(l.url, settings.linkBrowser || undefined)
-      if (!ok) setError(`无法打开 ${l.url}`)
+      if (!ok) setError(t('errOpenLink', { url: l.url }))
       else window.api.hideWindow()
     },
     [settings.linkBrowser]
@@ -1147,7 +1139,7 @@ function App(): JSX.Element {
         return
       }
       const fid = genFolderId()
-      const nf: Folder[] = [...folders, { id: fid, name: '文件夹', items: [tCell as Ref, srcRef] }]
+      const nf: Folder[] = [...folders, { id: fid, name: t('folder'), items: [tCell as Ref, srcRef] }]
       g.splice(sIdx, 1)
       const nt = g.findIndex((c) => cellKey(c) === targetKey)
       if (nt < 0) return
@@ -1320,16 +1312,16 @@ function App(): JSX.Element {
     if (orderSaveTimer.current !== null) window.clearTimeout(orderSaveTimer.current)
     orderSaveTimer.current = window.setTimeout(() => {
       orderSaveTimer.current = null
-      localStorage.setItem(ORDER_KEY, JSON.stringify(next))
+      setStore(ORDER_KEY, JSON.stringify(next))
     }, 300)
   }, [])
 
   const resetOrder = useCallback((): void => {
     commitOrder([])
     setGrid(null)
-    localStorage.removeItem('launchapp-grid')
+    clearStore(GRID_KEY)
     setFolders([])
-    localStorage.removeItem('launchapp-folders')
+    clearStore(FOLDERS_KEY)
   }, [commitOrder])
 
   const purgeRef = useCallback(
@@ -1368,7 +1360,9 @@ function App(): JSX.Element {
           displayName: uninstallTarget.name,
           how: '',
           cmd: '',
-          message: `查找卸载入口失败：${e instanceof Error ? e.message : String(e)}`
+          message: t('errPlanUninstall', {
+            msg: e instanceof Error ? e.message : String(e)
+          })
         })
       })
     return () => {
@@ -1376,20 +1370,34 @@ function App(): JSX.Element {
     }
   }, [uninstallTarget])
 
-  const removeOnly = useCallback(async (): Promise<void> => {
+  const removeOnly = useCallback((): void => {
     if (!uninstallTarget) return
     const lnk = uninstallTarget.lnk
-    try {
-      await window.api.removeShortcut(lnk)
-    } catch {
-      /* 忽略 */
-    }
-    setApps((list) => list.filter((a) => a.lnk !== lnk))
-    commitOrder(order.filter((l) => l !== lnk))
-    commitDock(dockLnks.filter((l) => l !== lnk))
-    purgeRef({ k: 'app', id: lnk })
-    setUninstallResult({ message: '已从启动器移除该图标（应用本体未卸载）。', kind: 'removed' })
-  }, [uninstallTarget, order, dockLnks, commitOrder, commitDock, purgeRef])
+    // 不删磁盘快捷方式（系统级开始菜单需管理员权限，删不掉还会报错），
+    // 只记入隐藏名单，启动器过滤展示；重扫/重启都不会再出现，也不影响卸载
+    const next = hiddenLnks.includes(lnk) ? hiddenLnks : [...hiddenLnks, lnk]
+    saveHidden(next)
+    setHiddenLnks(next)
+    setUninstallResult({
+      message: t('removedMsg'),
+      kind: 'removed'
+    })
+  }, [uninstallTarget, hiddenLnks])
+
+  // 从隐藏名单恢复单个/全部图标
+  const unhideApp = useCallback(
+    (lnk: string): void => {
+      const next = hiddenLnks.filter((l) => l !== lnk)
+      saveHidden(next)
+      setHiddenLnks(next)
+    },
+    [hiddenLnks]
+  )
+  const unhideAll = useCallback((): void => {
+    saveHidden([])
+    setHiddenLnks([])
+  }, [])
+
 
   const confirmUninstall = useCallback(async (): Promise<void> => {
     if (!uninstallTarget) return
@@ -1530,13 +1538,13 @@ function App(): JSX.Element {
         const dx = ev.clientX - st.startX
         const w = viewportRef.current?.clientWidth || window.innerWidth || 1
         const frac = dx / w
-        if (frac <= -0.18) setPage((pp) => Math.min(pp + 1, pageCount - 1))
-        else if (frac >= 0.18) setPage((pp) => Math.max(pp - 1, 0))
+        if (frac <= -0.18) turnPage(1)
+        else if (frac >= 0.18) turnPage(-1)
       }
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
-    [settingsOpen, safePage, pageCount, settings.clickBlankToHide, dismiss, setPage]
+    [settingsOpen, safePage, pageCount, settings.clickBlankToHide, dismiss, turnPage]
   )
 
   const scanning = progress !== null
@@ -1553,7 +1561,7 @@ function App(): JSX.Element {
               void launch(a)
             }}
           >
-            打开
+            {t('open')}
           </button>
           <button
             className="ctx-item"
@@ -1562,7 +1570,7 @@ function App(): JSX.Element {
               setCtxMenu(null)
             }}
           >
-            详细信息
+            {t('details')}
           </button>
           <button
             className="ctx-item"
@@ -1571,7 +1579,7 @@ function App(): JSX.Element {
               setCtxMenu(null)
             }}
           >
-            设置分类…
+            {t('setCategory')}
           </button>
           <button
             className="ctx-item danger"
@@ -1582,7 +1590,7 @@ function App(): JSX.Element {
               setUninstallTarget(a)
             }}
           >
-            卸载应用…
+            {t('uninstallApp')}
           </button>
           {dockLnks.includes(v.app.lnk) && (
             <button
@@ -1592,7 +1600,7 @@ function App(): JSX.Element {
                 setCtxMenu(null)
               }}
             >
-              从 Dock 移除
+              {t('removeFromDock')}
             </button>
           )}
         </>
@@ -1609,7 +1617,7 @@ function App(): JSX.Element {
               void openLink(l)
             }}
           >
-            打开
+            {t('open')}
           </button>
           <button
             className="ctx-item"
@@ -1618,7 +1626,7 @@ function App(): JSX.Element {
               setCtxMenu(null)
             }}
           >
-            编辑
+            {t('edit')}
           </button>
           <button
             className="ctx-item"
@@ -1627,7 +1635,7 @@ function App(): JSX.Element {
               setCtxMenu(null)
             }}
           >
-            设置分类…
+            {t('setCategory')}
           </button>
           <button
             className="ctx-item danger"
@@ -1635,7 +1643,7 @@ function App(): JSX.Element {
               deleteLink(v.link.id)
             }}
           >
-            删除
+            {t('remove')}
           </button>
         </>
       )
@@ -1649,7 +1657,7 @@ function App(): JSX.Element {
             setCtxMenu(null)
           }}
         >
-          打开
+          {t('open')}
         </button>
         <button
           className="ctx-item danger"
@@ -1657,7 +1665,7 @@ function App(): JSX.Element {
             unfolder(v.folderId)
           }}
         >
-          打散文件夹
+          {t('unfolder')}
         </button>
       </>
     )
@@ -1706,19 +1714,18 @@ function App(): JSX.Element {
             <path d="m20 20-3.5-3.5" />
           </svg>
           <input
-            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索"
+            placeholder={t('search')}
             spellCheck={false}
-            autoFocus={settings.autoFocusSearch}
+            tabIndex={-1}
           />
         </div>
         <div className="topbar-right">
           {!query && (filter === 'link' ? linkTagNames : appTagNames).length > 0 && (
             <Dropdown
               value={activeTag ?? ''}
-              options={[{ value: '', label: '全部' }].concat(
+              options={[{ value: '', label: t('all') }].concat(
                 (filter === 'link' ? linkTagNames : appTagNames).map((t) => ({ value: t, label: t }))
               )}
               onChange={(v) => setActiveTag(v === '' ? null : v)}
@@ -1727,8 +1734,8 @@ function App(): JSX.Element {
           <Dropdown
             value={filter}
             options={[
-              { value: 'app', label: '应用' },
-              { value: 'link', label: '网址' }
+              { value: 'app', label: t('tabApps') },
+              { value: 'link', label: t('tabLinks') }
             ]}
             onChange={(v) => setFilter(v as 'app' | 'link')}
           />
@@ -1736,7 +1743,7 @@ function App(): JSX.Element {
         <button
           className={`gear${settingsOpen ? ' active' : ''}`}
           onClick={() => setSettingsOpen((o) => !o)}
-          title="设置"
+          title={t('settingsTitle')}
         >
           <svg
             viewBox="0 0 24 24"
@@ -1758,8 +1765,8 @@ function App(): JSX.Element {
           <div className="spinner" />
           <div className="progress-text">
             {progress && progress.total > 0
-              ? `正在扫描应用 ${progress.done}/${progress.total}`
-              : '正在扫描应用…'}
+              ? t('scanningApps', { done: progress.done, total: progress.total })
+              : t('scanningAppsEllipsis')}
           </div>
         </div>
       )}
@@ -1773,14 +1780,14 @@ function App(): JSX.Element {
               startScan(true)
             }}
           >
-            重新扫描
+            {t('rescan')}
           </button>
-          <button onClick={() => setError(null)}>忽略</button>
+          <button onClick={() => setError(null)}>{t('dismiss')}</button>
         </div>
       )}
 
       {!scanning && displayList.length === 0 && !error && (
-        <div className="empty">{query ? '未找到匹配项' : '未发现可启动的应用'}</div>
+        <div className="empty">{query ? t('noMatch') : t('noApps')}</div>
       )}
 
       <main
@@ -1840,11 +1847,11 @@ function App(): JSX.Element {
               {p === pageCount - 1 && !query && settings.linksEnabled && filter === 'link' && (
                 <button
                   className="tile add-tile"
-                  title="添加网址"
+                  title={t('addLink')}
                   onClick={() => setAddLink({ open: true, editing: null })}
                 >
                   <div className="add-icon">+</div>
-                  <span className="tile-name">添加网址</span>
+                  <span className="tile-name">{t('addLink')}</span>
                 </button>
               )}
             </div>
@@ -1932,8 +1939,8 @@ function App(): JSX.Element {
               <button
                 key={p}
                 className={'dot' + (p === safePage ? ' active' : '')}
-                onClick={() => setPage(p)}
-                title={'拖到此处：把图标移到第 ' + (p + 1) + ' 页'}
+                onClick={() => gotoPage(p)}
+                title={t('dropToPage', { n: p + 1 })}
                 onDragOver={(e) => {
                   if (e.dataTransfer.types.includes('application/x-cell')) e.preventDefault()
                 }}
@@ -1974,11 +1981,11 @@ function App(): JSX.Element {
               <input
                 className="folder-name-input"
                 value={openFolderLive.name}
-                placeholder="文件夹名称"
+                placeholder={t('folderNamePlaceholder')}
                 spellCheck={false}
                 onChange={(e) => renameFolder(openFolderLive.folderId, e.target.value)}
               />
-              <button className="settings-close" onClick={() => setOpenFolder(null)} title="关闭 (Esc)">
+              <button className="settings-close" onClick={() => setOpenFolder(null)} title={t('closeEsc')}>
                 ✕
               </button>
             </header>
@@ -2001,7 +2008,7 @@ function App(): JSX.Element {
                   </button>
                   <button
                     className="folder-member-out"
-                    title="移出文件夹"
+                    title={t('moveOut')}
                     onClick={() => moveOut(openFolderLive.folderId, m)}
                   >
                     ↗
@@ -2011,7 +2018,7 @@ function App(): JSX.Element {
             </div>
             <div className="folder-pop-actions">
               <button className="set-button" onClick={() => unfolder(openFolderLive.folderId)}>
-                打散文件夹
+                {t('unfolder')}
               </button>
             </div>
           </div>
@@ -2023,34 +2030,34 @@ function App(): JSX.Element {
           <div className="info-card" onMouseDown={(e) => e.stopPropagation()}>
             <header className="info-head">
               <h3>{infoApp.name}</h3>
-              <button className="settings-close" onClick={() => setInfoApp(null)} title="关闭 (Esc)">
+              <button className="settings-close" onClick={() => setInfoApp(null)} title={t('closeEsc')}>
                 ✕
               </button>
             </header>
             <div className="info-rows">
               <div className="info-row">
-                <span className="k">名称</span>
+                <span className="k">{t('infoName')}</span>
                 <span className="v">{infoApp.name}</span>
               </div>
               <div className="info-row">
-                <span className="k">程序位置</span>
+                <span className="k">{t('infoTarget')}</span>
                 <span className="v">{infoApp.target}</span>
               </div>
               <div className="info-row">
-                <span className="k">启动参数</span>
-                <span className="v">{infoApp.args || '（无）'}</span>
+                <span className="k">{t('infoArgs')}</span>
+                <span className="v">{infoApp.args || t('noneDash')}</span>
               </div>
               <div className="info-row">
-                <span className="k">工作目录</span>
-                <span className="v">{infoApp.workdir || '（未设置）'}</span>
+                <span className="k">{t('infoWorkdir')}</span>
+                <span className="v">{infoApp.workdir || t('noneWorkdir')}</span>
               </div>
               <div className="info-row">
-                <span className="k">快捷方式</span>
+                <span className="k">{t('infoLnk')}</span>
                 <span className="v">{infoApp.lnk}</span>
               </div>
               <div className="info-row">
-                <span className="k">图标文件</span>
-                <span className="v">{infoApp.iconFile || '（无，显示首字占位）'}</span>
+                <span className="k">{t('infoIcon')}</span>
+                <span className="v">{infoApp.iconFile || t('noneIcon')}</span>
               </div>
             </div>
           </div>
@@ -2066,16 +2073,20 @@ function App(): JSX.Element {
         >
           <div className="info-card uninstall-card" onMouseDown={(e) => e.stopPropagation()}>
             <header className="info-head">
-              <h3>{uninstallResult ? '卸载结果' : '卸载 ' + uninstallTarget.name + '？'}</h3>
+              <h3>
+                {uninstallResult
+                  ? t('uninstallResult')
+                  : t('uninstallConfirm', { name: uninstallTarget.name })}
+              </h3>
             </header>
             {uninstallResult ? (
               <div className="uninstall-msg">{uninstallResult.message}</div>
             ) : !uninstallPlan ? (
-              <div className="uninstall-msg">正在查找「{uninstallTarget.name}」的卸载程序…</div>
+              <div className="uninstall-msg">{t('findingUninstaller', { name: uninstallTarget.name })}</div>
             ) : planRunnable ? (
               <>
                 <div className="uninstall-msg">
-                  这会调用该应用自己的卸载程序（不是只从启动器移除图标）。 卸载向导弹出后，请在其中完成确认。
+                  {t('uninstallWillRun')}
                 </div>
                 <div className="uninstall-plan">
                   <div className="up-how">{uninstallPlan.how}</div>
@@ -2090,29 +2101,29 @@ function App(): JSX.Element {
                 <>
                   {!resultDone && (
                     <button className="set-button danger-btn" onClick={() => void removeOnly()}>
-                      仅移除图标
+                      {t('removeIconOnly')}
                     </button>
                   )}
                   <button className="set-button" onClick={() => setUninstallTarget(null)}>
-                    关闭
+                    {t('close')}
                   </button>
                 </>
               ) : (
                 <>
                   <button className="set-button" disabled={uninstallBusy} onClick={() => setUninstallTarget(null)}>
-                    取消
+                    {t('cancel')}
                   </button>
                   {uninstallPlan?.kind === 'store' && (
                     <button
                       className="set-button"
                       onClick={() => void window.api.openUninstallSettings()}
                     >
-                      打开系统设置
+                      {t('openSystemSettings')}
                     </button>
                   )}
                   {!planRunnable && (
                     <button className="set-button" disabled={uninstallBusy} onClick={() => void removeOnly()}>
-                      仅移除图标
+                      {t('removeIconOnly')}
                     </button>
                   )}
                   {planRunnable && (
@@ -2121,7 +2132,7 @@ function App(): JSX.Element {
                       disabled={uninstallBusy}
                       onClick={() => void confirmUninstall()}
                     >
-                      {uninstallBusy ? '正在启动卸载程序…' : '确认卸载'}
+                      {uninstallBusy ? t('startingUninstaller') : t('confirmUninstall')}
                     </button>
                   )}
                 </>
@@ -2169,6 +2180,9 @@ function App(): JSX.Element {
           scanning={scanning}
           links={links}
           usedIcons={apps.map((a) => a.iconFile).filter(Boolean)}
+          hiddenApps={hiddenApps}
+          onUnhide={unhideApp}
+          onUnhideAll={unhideAll}
           onDeleteLink={deleteLink}
           onEditLink={(l) => {
             setSettingsOpen(false)

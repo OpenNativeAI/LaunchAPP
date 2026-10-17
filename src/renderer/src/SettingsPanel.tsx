@@ -9,12 +9,13 @@ import {
   type Settings,
   type WebLink
 } from './settings'
+import { t } from './i18n'
 
 declare const __APP_VERSION__: string
 
 const BG_COLOR_OPTIONS = BG_COLOR_PRESETS.map((c) => ({ ...c, color: c.value }))
 
-const AUTHOR = '（待填写作者名）'
+const AUTHOR = 'LuPeiZheng'
 
 interface Props {
   settings: Settings
@@ -28,6 +29,10 @@ interface Props {
   onEditLink: (link: WebLink) => void
   /** 当前所有应用图标缓存文件名，用于分析失效图标 */
   usedIcons: string[]
+  /** 被"仅移除图标"隐藏的应用（展示图标与名称，可恢复） */
+  hiddenApps: { lnk: string; name: string; iconFile: string }[]
+  onUnhide: (lnk: string) => void
+  onUnhideAll: () => void
 }
 
 function Slider({
@@ -111,7 +116,7 @@ function Dropdown<T extends string | number>({
             {current?.color && (
               <span className="dropdown-dot" style={{ background: current.color }} />
             )}
-            <span>{current ? current.text : String(value)}</span>
+            <span>{current ? t(current.text) : String(value)}</span>
           </span>
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4">
             <path d="m6 9 6 6 6-6" />
@@ -130,7 +135,7 @@ function Dropdown<T extends string | number>({
                 }}
               >
                 {o.color && <span className="dropdown-dot" style={{ background: o.color }} />}
-                {o.text}
+                {t(o.text)}
               </button>
             ))}
           </div>
@@ -156,7 +161,7 @@ function LinkBrowserRow({
   const load = (refresh: boolean): void => {
     setErr('')
     const p = refresh ? window.api.refreshBrowsers() : window.api.listBrowsers()
-    p.then((d) => setInfo(d)).catch((e) => setErr('识别本机浏览器失败：' + String(e)))
+    p.then((d) => setInfo(d)).catch((e) => setErr(t('errBrowserDetect') + String(e)))
   }
 
   useEffect(() => {
@@ -164,7 +169,7 @@ function LinkBrowserRow({
   }, [])
 
   const defaultName = info?.browsers.find((b) => b.key === info.defaultKey)?.name || ''
-  const options = [{ value: '', text: defaultName ? `系统默认（${defaultName}）` : '系统默认' }].concat(
+  const options = [{ value: '', text: defaultName ? t('systemDefaultWith', { name: defaultName }) : t('systemDefault') }].concat(
     (info?.browsers || []).map((b) => ({ value: b.key, text: b.name }))
   )
   const stale = Boolean(info && value && !info.browsers.some((b) => b.key === value))
@@ -172,21 +177,21 @@ function LinkBrowserRow({
   return (
     <>
       <Dropdown
-        label="打开网址使用"
+        label={t('openWithBrowser')}
         value={value}
         options={options}
         onChange={onChange}
       />
       <div className="set-row">
         <span className="set-label">
-          {info ? `已识别到 ${info.browsers.length} 个浏览器` : '正在识别本机浏览器…'}
+          {info ? t('browsersDetected', { n: info.browsers.length }) : t('detectingBrowsers')}
         </span>
         <button className="set-button small" onClick={() => load(true)}>
-          重新识别
+          {t('redetect')}
         </button>
       </div>
       {err && <div className="set-hint">{err}</div>}
-      {stale && <div className="set-hint">上次选择的浏览器已卸载，将改用系统默认浏览器。</div>}
+      {stale && <div className="set-hint">{t('browserStaleHint')}</div>}
     </>
   )
 }
@@ -245,7 +250,7 @@ function ShortcutRecorder({
 
     // 鼠标键改由主进程的全局钩子录入：Chromium 会吞掉中键事件，渲染层收不到
     const off = window.api.onMouseCaptured((button) => {
-      setDbg('收到鼠标键 #' + button)
+      setDbg(t('dbgMouseButton', { n: button }))
       const accel =
         button === 3
           ? 'MouseMiddle'
@@ -255,14 +260,14 @@ function ShortcutRecorder({
               ? 'MouseForward'
               : null
       if (!accel) {
-        setDbg('左/右键不能作唤起键，请按中键或侧键')
+        setDbg(t('dbgBadMouseButton'))
         return
       }
       setRecording(false)
       commitRef.current(accel)
     })
     void window.api.startMouseCapture().then((ok) => {
-      if (!ok) setDbg('鼠标钩子不可用，无法录入鼠标键')
+      if (!ok) setDbg(t('dbgHookUnavailable'))
     })
     return () => {
       window.removeEventListener('keydown', handler, true)
@@ -273,18 +278,18 @@ function ShortcutRecorder({
 
   return (
     <div className="set-row">
-      <span className="set-label">全局唤起快捷键</span>
+      <span className="set-label">{t('globalShortcut')}</span>
       <button
         type="button"
         className={`recorder${recording ? ' recording' : ''}`}
         onClick={() => setRecording((r) => !r)}
       >
-        {recording ? '按下组合键 或 点击鼠标键…' : value ? displayShortcut(value) : '未设置'}
+        {recording ? t('pressKeysHint') : value ? displayShortcut(value) : t('notSet')}
       </button>
-      {recording && <span className="recorder-dbg">{dbg || '等待鼠标事件…'}</span>}
+      {recording && <span className="recorder-dbg">{dbg || t('waitingMouse')}</span>}
       {value && (
         <button type="button" className="set-button small" onClick={() => onCommit(null)}>
-          清除
+          {t('clear')}
         </button>
       )}
     </div>
@@ -292,14 +297,14 @@ function ShortcutRecorder({
 }
 
 const TABS = [
-  { id: 'appearance', title: '外观' },
-  { id: 'layout', title: '布局' },
-  { id: 'behavior', title: '行为' },
-  { id: 'system', title: '快捷键与系统' },
-  { id: 'apps', title: '应用' },
-  { id: 'links', title: '网址' },
-  { id: 'storage', title: '存储' },
-  { id: 'about', title: '关于' }
+  { id: 'appearance', title: 'tabAppearance' },
+  { id: 'layout', title: 'tabLayout' },
+  { id: 'behavior', title: 'tabBehavior' },
+  { id: 'system', title: 'tabSystem' },
+  { id: 'apps', title: 'tabApps' },
+  { id: 'links', title: 'tabLinks' },
+  { id: 'storage', title: 'tabStorage' },
+  { id: 'about', title: 'tabAbout' }
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -325,6 +330,7 @@ function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
   const [info, setInfo] = useState<StorageInfo | null>(null)
   const [analysis, setAnalysis] = useState<StorageAnalysis | null>(null)
   const [busy, setBusy] = useState(false)
+  const [stage, setStage] = useState('')
   const [err, setErr] = useState('')
   // 只在点“分析”时读一次，避免 apps 变化触发重复分析
   const usedRef = useRef(usedIcons)
@@ -332,13 +338,14 @@ function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
 
   const analyze = (): void => {
     setBusy(true)
+    setStage('')
     setErr('')
     // 应用列表还没扫出来时传 null：主进程手上没有图标文件名，此时判定会把整份缓存说成残留
     const used = usedRef.current.length > 0 ? usedRef.current : null
     window.api
       .analyzeStorage(used)
       .then(setAnalysis)
-      .catch((e) => setErr('分析失败：' + String(e)))
+      .catch((e) => setErr(t('errAnalyze') + String(e)))
       .finally(() => setBusy(false))
   }
 
@@ -348,9 +355,11 @@ function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
       .storageInfo()
       .then((d) => alive && setInfo(d))
       .catch((e) => alive && setErr(String(e)))
+    const offStage = window.api.onStorageStage(setStage)
     analyze()
     return () => {
       alive = false
+      offStage()
     }
   }, [])
 
@@ -358,46 +367,47 @@ function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
     window.api
       .openStorage(target)
       .then((msg) => {
-        if (msg) setErr('无法打开文件夹：' + msg)
+        if (msg) setErr(t('errOpenFolder') + msg)
       })
       .catch((e) => setErr(String(e)))
   }
 
   return (
     <>
-      <div className="set-hint">点击「打开文件夹」可在资源管理器中定位对应存储位置。</div>
+      <div className="set-hint">{t('storageHint')}</div>
       {err && <div className="set-hint">{err}</div>}
       <div className="set-row">
-        <span className="set-label">数据与设置存储位置</span>
+        <span className="set-label">{t('storageLocation')}</span>
         <button className="set-button small" onClick={() => open('root')}>
-          打开文件夹
+          {t('openFolder')}
         </button>
       </div>
       {info && <div className="storage-path">{info.dir}</div>}
       <div className="set-row">
-        <span className="set-label">图标缓存</span>
+        <span className="set-label">{t('iconCache')}</span>
         <button className="set-button small" onClick={() => open('icons')}>
-          打开文件夹
+          {t('openFolder')}
         </button>
       </div>
       {info && (
         <div className="storage-path">
-          {info.iconsCount} 个文件 · {formatBytes(info.iconsSize)}
+          {t('filesCountSize', { n: info.iconsCount, size: formatBytes(info.iconsSize) })}
         </div>
       )}
       <div className="set-row">
-        <span className="set-label">占用分析</span>
+        <span className="set-label">{t('usageAnalysis')}</span>
         <button className="set-button small" onClick={analyze} disabled={busy}>
-          {busy ? '分析中…' : '重新分析'}
+          {busy ? t('analyzing') : t('reanalyze')}
         </button>
       </div>
+      {busy && <div className="storage-path">{t(stage || 'saStageWalk')}</div>}
       {analysis && (
         <div className="sa">
           <div className="sa-total">
-            共 {formatBytes(analysis.total)} · {analysis.files} 个文件
+            {t('saTotal', { size: formatBytes(analysis.total), n: analysis.files })}
           </div>
           {analysis.groups.map((g) => (
-            <div className="sa-row" key={g.label}>
+            <div className="sa-row" key={g.id}>
               <span className="sa-label">{g.label}</span>
               <span className="sa-bar">
                 <span
@@ -409,31 +419,42 @@ function StorageSection({ usedIcons }: { usedIcons: string[] }): JSX.Element {
               </span>
               <span className="sa-size">
                 {formatBytes(g.bytes)}
-                {g.files > 1 ? ' · ' + g.files + ' 个' : ''}
+                {g.files > 1 ? t('saFiles', { n: g.files }) : ''}
               </span>
             </div>
           ))}
+          {analysis.groups.some((g) => g.id === 'runtime') && (
+            <div className="set-hint">{t('saRuntimeHint')}</div>
+          )}
+          <div className="sa-sub">{t('saTopFiles', { n: analysis.top.length })}</div>
+          {analysis.top.map((f) => (
+            <div className="sa-file" key={f.path}>
+              <span className="sa-path" title={f.path}>
+                {f.path}
+              </span>
+              <span className="sa-size">{formatBytes(f.bytes)}</span>
+            </div>
+          ))}
           {analysis.orphans === null ? (
-            <div className="set-hint">应用列表还在扫描，本次不判定残留图标；扫完后再点重新分析。</div>
+            <div className="set-hint">{t('saPending')}</div>
           ) : (
             analysis.orphans.count > 0 && (
               <div className="set-hint">
-                {analysis.orphans.count} 个图标缓存（{formatBytes(analysis.orphans.bytes)}
-                ）当前没有任何应用在用，通常是应用已卸载或改名后留下的残留文件。
+                {t('saOrphans', { n: analysis.orphans.count, size: formatBytes(analysis.orphans.bytes) })}
               </div>
             )
           )}
         </div>
       )}
-      {analysis && analysis.groups.some((g) => g.label === '损坏留档') && (
+      {analysis && analysis.groups.some((g) => g.id === 'recovered') && (
         <>
           <div className="set-hint">
-            有存储文件坏掉或被清空过，原件已改名留档，不会自动删除，可以打开核对。
+            {t('recoveredHint')}
           </div>
           <div className="set-row">
-            <span className="set-label">损坏留档</span>
+            <span className="set-label">{t('recoveredLabel')}</span>
             <button className="set-button small" onClick={() => open('recovered')}>
-              打开文件夹
+              {t('openFolder')}
             </button>
           </div>
         </>
@@ -452,7 +473,10 @@ export default function SettingsPanel({
   links,
   onDeleteLink,
   onEditLink,
-  usedIcons
+  usedIcons,
+  hiddenApps,
+  onUnhide,
+  onUnhideAll
 }: Props): JSX.Element {
   const [tab, setTab] = useState<TabId>('appearance')
 
@@ -471,23 +495,23 @@ export default function SettingsPanel({
     <div className="settings-mask" onClick={onClose}>
       <div className="settings-card" onClick={(e) => e.stopPropagation()}>
         <nav className="settings-nav">
-          <div className="nav-head">设置</div>
-          {TABS.map((t) => (
+          <div className="nav-head">{t('settingsTitle')}</div>
+          {TABS.map((item) => (
             <button
-              key={t.id}
+              key={item.id}
               type="button"
-              className={`nav-item${tab === t.id ? ' active' : ''}`}
-              onClick={() => setTab(t.id)}
+              className={`nav-item${tab === item.id ? ' active' : ''}`}
+              onClick={() => setTab(item.id)}
             >
-              {t.title}
+              {t(item.title)}
             </button>
           ))}
         </nav>
 
         <div className="settings-body">
           <header className="settings-head">
-            <h2>{TABS.find((t) => t.id === tab)?.title}</h2>
-            <button className="settings-close" onClick={onClose} title="关闭 (Esc)">
+            <h2>{t(TABS.find((item) => item.id === tab)?.title ?? 'tabAppearance')}</h2>
+            <button className="settings-close" onClick={onClose} title={t('closeEsc')}>
               ✕
             </button>
           </header>
@@ -496,34 +520,43 @@ export default function SettingsPanel({
             {tab === 'appearance' && (
               <>
                 <Dropdown
-                  label="背景样式"
+                  label={t('languageLabel')}
+                  value={settings.language}
+                  options={[
+                    { value: 'zh', text: '简体中文' },
+                    { value: 'en', text: 'English' }
+                  ]}
+                  onChange={(v) => onChange({ language: v })}
+                />
+                <Dropdown
+                  label={t('bgStyle')}
                   value={settings.bgStyle}
                   options={[
-                    { value: 'wallpaper', text: '系统壁纸' },
-                    { value: 'solid', text: '纯色' }
+                    { value: 'wallpaper', text: 'bgWallpaper' },
+                    { value: 'solid', text: 'bgSolid' }
                   ]}
                   onChange={(v) => onChange({ bgStyle: v })}
                 />
                 {settings.bgStyle === 'solid' && (
                   <Dropdown
-                    label="背景颜色"
+                    label={t('bgColor')}
                     value={settings.bgColor}
                     options={BG_COLOR_OPTIONS}
                     onChange={(v) => onChange({ bgColor: v })}
                   />
                 )}
                 <Dropdown
-                  label="图标形状"
+                  label={t('iconShape')}
                   value={settings.iconShape}
                   options={[
-                    { value: 'rounded', text: '圆角' },
-                    { value: 'square', text: '方形' },
-                    { value: 'circle', text: '圆形' }
+                    { value: 'rounded', text: 'shapeRounded' },
+                    { value: 'square', text: 'shapeSquare' },
+                    { value: 'circle', text: 'shapeCircle' }
                   ]}
                   onChange={(v) => onChange({ iconShape: v })}
                 />
                 <Slider
-                  label="图标大小"
+                  label={t('iconSize')}
                   value={settings.iconSize}
                   min={48}
                   max={112}
@@ -532,7 +565,7 @@ export default function SettingsPanel({
                   onChange={(v) => onChange({ iconSize: v })}
                 />
                 <Slider
-                  label="文字大小"
+                  label={t('fontSize')}
                   value={settings.fontSize}
                   min={11}
                   max={18}
@@ -540,27 +573,27 @@ export default function SettingsPanel({
                   onChange={(v) => onChange({ fontSize: v })}
                 />
                 <Toggle
-                  label="显示应用名称"
+                  label={t('showAppNames')}
                   checked={settings.showAppNames}
                   onChange={(v) => onChange({ showAppNames: v })}
                 />
                 <Toggle
-                  label="显示时钟"
+                  label={t('showClock')}
                   checked={settings.showClock}
                   onChange={(v) => onChange({ showClock: v })}
                 />
                 <Slider
-                  label="背景模糊"
+                  label={t('bgBlur')}
                   value={settings.blur}
                   min={0}
                   max={120}
                   step={2}
-                  display={settings.blur === 0 ? '关闭' : `${settings.blur}px`}
+                  display={settings.blur === 0 ? t('off') : `${settings.blur}px`}
                   disabled={settings.bgStyle !== 'wallpaper'}
                   onChange={(v) => onChange({ blur: v })}
                 />
                 <Slider
-                  label="背景压暗"
+                  label={t('bgDim')}
                   value={Math.round(settings.dim * 100)}
                   min={0}
                   max={80}
@@ -569,12 +602,12 @@ export default function SettingsPanel({
                   onChange={(v) => onChange({ dim: v / 100 })}
                 />
                 <Slider
-                  label="翻页动画时长"
+                  label={t('animDuration')}
                   value={settings.anim}
                   min={0}
                   max={800}
                   step={20}
-                  display={settings.anim === 0 ? '关闭' : `${settings.anim}ms`}
+                  display={settings.anim === 0 ? t('off') : `${settings.anim}ms`}
                   onChange={(v) => onChange({ anim: v })}
                 />
               </>
@@ -583,39 +616,39 @@ export default function SettingsPanel({
             {tab === 'layout' && (
               <>
                 <Toggle
-                  label="自动网格（按窗口大小）"
+                  label={t('autoGrid')}
                   checked={settings.autoGrid}
                   onChange={(v) => onChange({ autoGrid: v })}
                 />
                 <Dropdown
-                  label="每行列数"
+                  label={t('colsPerRow')}
                   value={settings.cols}
                   options={Array.from({ length: 10 }, (_, k) => ({
                     value: k + 3,
-                    text: `${k + 3} 列`
+                    text: t('colsN', { n: k + 3 })
                   }))}
                   onChange={(v) => onChange({ cols: v, autoGrid: false })}
                 />
                 <Dropdown
-                  label="每页行数"
+                  label={t('rowsPerPage')}
                   value={settings.rows}
                   options={Array.from({ length: 7 }, (_, k) => ({
                     value: k + 2,
-                    text: `${k + 2} 行`
+                    text: t('rowsN', { n: k + 2 })
                   }))}
                   onChange={(v) => onChange({ rows: v, autoGrid: false })}
                 />
                 <Dropdown
-                  label="页码指示器"
+                  label={t('indicator')}
                   value={settings.indicator}
                   options={[
-                    { value: 'dots', text: '圆点' },
-                    { value: 'numbers', text: '数字' }
+                    { value: 'dots', text: 'indicatorDots' },
+                    { value: 'numbers', text: 'indicatorNumbers' }
                   ]}
                   onChange={(v) => onChange({ indicator: v })}
                 />
                 <Slider
-                  label="图标间距"
+                  label={t('gridGap')}
                   value={settings.gridGap}
                   min={0}
                   max={32}
@@ -623,70 +656,71 @@ export default function SettingsPanel({
                   display={`${settings.gridGap}px`}
                   onChange={(v) => onChange({ gridGap: v })}
                 />
-                <div className="set-hint">手动选择行列数会自动关闭"自动网格"。</div>
+                <div className="set-hint">{t('manualGridHint')}</div>
               </>
             )}
 
             {tab === 'behavior' && (
               <>
                 <Toggle
-                  label="显示底部 Dock 栏"
+                  label={t('dockVisible')}
                   checked={settings.dockVisible}
                   onChange={(v) => onChange({ dockVisible: v })}
                 />
                 <Toggle
-                  label="关闭时退出程序（默认隐藏到托盘）"
+                  label={t('closeQuits')}
                   checked={settings.closeQuits}
                   onChange={(v) => onChange({ closeQuits: v })}
                 />
                 <Toggle
-                  label="点击空白处关闭"
+                  label={t('clickBlank')}
                   checked={settings.clickBlankToHide}
                   onChange={(v) => onChange({ clickBlankToHide: v })}
                 />
                 <Toggle
-                  label="滚轮翻页"
+                  label={t('wheelPaging')}
                   checked={settings.wheelPaging}
                   onChange={(v) => onChange({ wheelPaging: v })}
                 />
                 <Toggle
-                  label="记住上次浏览页码"
+                  label={t('rememberPage')}
                   checked={settings.rememberPage}
                   onChange={(v) => onChange({ rememberPage: v })}
                 />
                 <Toggle
-                  label="启动时自动聚焦搜索框"
-                  checked={settings.autoFocusSearch}
-                  onChange={(v) => onChange({ autoFocusSearch: v })}
-                />
-                <Toggle
-                  label="失去焦点时自动隐藏窗口"
+                  label={t('autoHideOnBlur')}
                   checked={settings.autoHideOnBlur}
                   onChange={(v) => onChange({ autoHideOnBlur: v })}
                 />
                 <Toggle
-                  label="Dock 放大镜效果"
+                  label={t('dockMagnify')}
                   checked={settings.dockMagnify}
                   onChange={(v) => onChange({ dockMagnify: v })}
                 />
                 <Toggle
-                  label="开启音效"
+                  label={t('soundEnabled')}
                   checked={settings.soundEnabled}
                   onChange={(v) => onChange({ soundEnabled: v })}
                 />
                 {settings.soundEnabled && (
                   <>
                     <Dropdown
-                      label="出现时"
+                      label={t('soundOpen')}
                       value={settings.openSound}
                       options={SOUND_OPTIONS}
                       onChange={(v) => onChange({ openSound: v })}
                     />
                     <Dropdown
-                      label="关闭时"
+                      label={t('soundClose')}
                       value={settings.closeSound}
                       options={SOUND_OPTIONS}
                       onChange={(v) => onChange({ closeSound: v })}
+                    />
+                    <Dropdown
+                      label={t('soundPage')}
+                      value={settings.pageSound}
+                      options={SOUND_OPTIONS}
+                      onChange={(v) => onChange({ pageSound: v })}
                     />
                   </>
                 )}
@@ -700,53 +734,79 @@ export default function SettingsPanel({
                   onCommit={(accel) => onChange({ globalShortcut: accel })}
                 />
                 <Toggle
-                  label="开机自动启动"
+                  label={t('autoLaunch')}
                   checked={settings.autoLaunch}
                   onChange={(v) => onChange({ autoLaunch: v })}
                 />
-                <div className="set-hint">
-                  提示：托盘图标常驻，左键点击托盘或按上面的唤起键（默认鼠标中键）打开，右键菜单可退出程序。
-                  按 Esc 只关闭设置页，再按一次才隐藏窗口。
-                  全局快捷键支持键盘组合键，也支持单独的鼠标键（中键 / 侧键；鼠标键不能搭配修饰键）。
-                </div>
+                <div className="set-hint">{t('systemHint')}</div>
               </>
             )}
 
             {tab === 'apps' && (
               <>
                 <Dropdown
-                  label="应用排序方式"
+                  label={t('appSort')}
                   value={settings.appSort}
                   options={[
-                    { value: 'custom', text: '自定义（拖拽）' },
-                    { value: 'name', text: '按名称' }
+                    { value: 'custom', text: 'appSortCustom' },
+                    { value: 'name', text: 'appSortName' }
                   ]}
                   onChange={(v) => onChange({ appSort: v })}
                 />
                 {settings.appSort === 'name' && (
-                  <div className="set-hint">按名称排序时，图标位置自动排列，拖拽调整不生效。</div>
+                  <div className="set-hint">{t('appSortNameHint')}</div>
                 )}
                 <Toggle
-                  label="隐藏系统工具（控制面板、字符映射表等）"
+                  label={t('hideSystemApps')}
                   checked={settings.hideSystemApps}
                   onChange={(v) => onChange({ hideSystemApps: v })}
                 />
+                <div className="set-hint">{t('removedIconsHint')}</div>
+                {hiddenApps.length === 0 ? (
+                  <div className="set-hint">{t('noRemovedIcons')}</div>
+                ) : (
+                  <>
+                    <div className="set-row">
+                      <span className="set-label">{t('removedIconsCount', { n: hiddenApps.length })}</span>
+                      <button className="set-button small" onClick={onUnhideAll}>
+                        {t('unhideAll')}
+                      </button>
+                    </div>
+                    <div className="link-manage">
+                      {hiddenApps.map((a) => (
+                        <div key={a.lnk} className="link-manage-row">
+                          {a.iconFile ? (
+                            <img className="link-manage-icon" src={`appicon:///${a.iconFile}`} alt="" />
+                          ) : (
+                            <div className="link-manage-icon fallback">{a.name.slice(0, 1)}</div>
+                          )}
+                          <div className="link-manage-info">
+                            <span className="link-manage-name">{a.name}</span>
+                          </div>
+                          <button className="set-button small" onClick={() => onUnhide(a.lnk)}>
+                            {t('unhide')}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
                 <div className="set-row">
-                  <span className="set-label">恢复默认排序（清除拖拽调整的位置）</span>
+                  <span className="set-label">{t('resetOrderLabel')}</span>
                   <button className="set-button" onClick={onResetOrder}>
-                    重置排序
+                    {t('resetOrder')}
                   </button>
                 </div>
                 <div className="set-row">
-                  <span className="set-label">重新扫描并重建图标缓存</span>
+                  <span className="set-label">{t('rescanLabel')}</span>
                   <button className="set-button" onClick={onRescan} disabled={scanning}>
-                    {scanning ? '扫描中…' : '重新扫描'}
+                    {scanning ? t('scanning') : t('rescan')}
                   </button>
                 </div>
                 <div className="set-row">
-                  <span className="set-label">恢复默认设置</span>
+                  <span className="set-label">{t('restoreDefaultsLabel')}</span>
                   <button className="set-button" onClick={() => onChange({ ...DEFAULT_SETTINGS })}>
-                    恢复
+                    {t('restore')}
                   </button>
                 </div>
               </>
@@ -755,7 +815,7 @@ export default function SettingsPanel({
             {tab === 'links' && (
               <>
                 <Toggle
-                  label="启用网址模块（顶部切换 应用 / 网址）"
+                  label={t('linksEnabled')}
                   checked={settings.linksEnabled}
                   onChange={(v) => onChange({ linksEnabled: v })}
                 />
@@ -763,9 +823,9 @@ export default function SettingsPanel({
                   value={settings.linkBrowser}
                   onChange={(v) => onChange({ linkBrowser: v })}
                 />
-                <div className="set-hint">网址与应用各自独立管理，统一汇集在本设置面板中。</div>
+                <div className="set-hint">{t('linksHint')}</div>
                 {links.length === 0 ? (
-                  <div className="set-hint">还没有网址。切到“网址”视图，点击“+”即可添加。</div>
+                  <div className="set-hint">{t('noLinksHint')}</div>
                 ) : (
                   <div className="link-manage">
                     {links.map((l) => (
@@ -780,13 +840,13 @@ export default function SettingsPanel({
                           <span className="link-manage-url">{l.url}</span>
                         </div>
                         <button className="set-button small" onClick={() => onEditLink(l)}>
-                          编辑
+                          {t('edit')}
                         </button>
                         <button
                           className="set-button small danger-btn"
                           onClick={() => onDeleteLink(l.id)}
                         >
-                          删除
+                          {t('remove')}
                         </button>
                       </div>
                     ))}
@@ -800,20 +860,16 @@ export default function SettingsPanel({
             {tab === 'about' && (
               <>
                 <div className="about-head">
-                  <div className="about-name">LaunchApp 启动器</div>
-                  <div className="about-version">版本 v{__APP_VERSION__}</div>
+                  <div className="about-name">{t('aboutName')}</div>
+                  <div className="about-version">{t('version')} v{__APP_VERSION__}</div>
                 </div>
-                <div className="set-hint">
-                  一款仿 macOS Launchpad 的 Windows 快捷启动器：自动扫描已安装应用并提取真实图标，
-                  支持全屏模糊背景、分页网格、Dock 栏拖拽收藏、全局快捷键与鼠标侧键唤起、网址快捷方式，
-                  以及右键真·卸载。所有设置持久化保存在用户数据文件夹中。
-                </div>
+                <div className="set-hint">{t('aboutDesc')}</div>
                 <div className="set-row">
-                  <span className="set-label">作者</span>
+                  <span className="set-label">{t('author')}</span>
                   <span className="about-value">{AUTHOR}</span>
                 </div>
                 <div className="set-row">
-                  <span className="set-label">技术栈</span>
+                  <span className="set-label">{t('techStack')}</span>
                   <span className="about-value">Electron · React · TypeScript</span>
                 </div>
               </>

@@ -57,13 +57,16 @@ export interface StorageAnalysis {
   dir: string
   total: number
   files: number
-  groups: { label: string; bytes: number; files: number }[]
+  groups: { id: string; label: string; bytes: number; files: number }[]
+  /** 最大的几个文件，用于解释体积到底被什么吃掉 */
+  top: { path: string; bytes: number; group: string }[]
   /** null = 应用列表未就绪，本次没有做残留判定 */
   orphans: { count: number; bytes: number; sample: string[] } | null
 }
 
 const api = {
   scanApps: (force = false): Promise<AppInfo[]> => ipcRenderer.invoke('apps:scan', force),
+  cachedApps: (): Promise<AppInfo[]> => ipcRenderer.invoke('apps:cached'),
   launchApp: (info: AppInfo): Promise<boolean> => ipcRenderer.invoke('apps:launch', info),
   uninstallApp: (info: AppInfo): Promise<UninstallResult> =>
     ipcRenderer.invoke('apps:uninstall', info),
@@ -72,13 +75,15 @@ const api = {
   removeShortcut: (lnk: string): Promise<void> => ipcRenderer.invoke('apps:remove-shortcut', lnk),
   openUninstallSettings: (): Promise<void> =>
     ipcRenderer.invoke('apps:open-uninstall-settings'),
+  setUiLang: (lang: 'zh' | 'en'): Promise<void> =>
+    ipcRenderer.invoke('ui:lang', lang),
   fetchLinkMeta: (url: string): Promise<LinkMeta> => ipcRenderer.invoke('links:fetch-meta', url),
   openLink: (url: string, browserKey?: string): Promise<boolean> =>
     ipcRenderer.invoke('links:open', url, browserKey),
   listBrowsers: (): Promise<BrowserList> => ipcRenderer.invoke('browsers:list'),
   refreshBrowsers: (): Promise<BrowserList> => ipcRenderer.invoke('browsers:refresh'),
   storeRead: (): Promise<Record<string, string> | null> => ipcRenderer.invoke('store:read'),
-  storeWrite: (data: Record<string, string>): Promise<boolean> =>
+  storeWrite: (data: Record<string, string | null>): Promise<boolean> =>
     ipcRenderer.invoke('store:write', data),
   storageInfo: (): Promise<StorageInfo> => ipcRenderer.invoke('storage:info'),
   analyzeStorage: (usedIcons: string[] | null): Promise<StorageAnalysis> =>
@@ -103,6 +108,11 @@ const api = {
       cb(progress)
     ipcRenderer.on('apps:progress', listener)
     return () => ipcRenderer.removeListener('apps:progress', listener)
+  },
+  onStorageStage: (cb: (stageKey: string) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, key: string): void => cb(key)
+    ipcRenderer.on('storage:stage', listener)
+    return () => ipcRenderer.removeListener('storage:stage', listener)
   },
   onWallpaper: (cb: (dataUrl: string) => void): void => {
     ipcRenderer.on('wallpaper', (_e, dataUrl: string) => cb(dataUrl))

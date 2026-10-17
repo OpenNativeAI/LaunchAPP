@@ -49,6 +49,7 @@ declare global {
     electron: ElectronAPI
     api: {
       scanApps: (force?: boolean) => Promise<AppInfo[]>
+      cachedApps: () => Promise<AppInfo[]>
       launchApp: (info: AppInfo) => Promise<boolean>
       uninstallApp: (info: AppInfo) => Promise<UninstallResult>
       planUninstall: (info: AppInfo) => Promise<UninstallPlan>
@@ -59,7 +60,7 @@ declare global {
       listBrowsers: () => Promise<BrowserList>
       refreshBrowsers: () => Promise<BrowserList>
       storeRead: () => Promise<Record<string, string> | null>
-      storeWrite: (data: Record<string, string>) => Promise<boolean>
+      storeWrite: (data: Record<string, string | null>) => Promise<boolean>
       storageInfo: () => Promise<{
         dir: string
         iconsDir: string
@@ -74,9 +75,11 @@ declare global {
         dir: string
         total: number
         files: number
-        groups: { label: string; bytes: number; files: number }[]
+        groups: { id: string; label: string; bytes: number; files: number }[]
+        top: { path: string; bytes: number; group: string }[]
         orphans: { count: number; bytes: number; sample: string[] } | null
       }>
+      setUiLang: (lang: 'zh' | 'en') => Promise<void>
       openStorage: (target: 'root' | 'icons' | 'recovered') => Promise<string>
       hideWindow: () => void
       quitApp: () => void
@@ -85,6 +88,7 @@ declare global {
       stopMouseCapture: () => Promise<void>
       onMouseCaptured: (cb: (button: number) => void) => () => void
       setAutoLaunch: (enabled: boolean) => Promise<boolean>
+      onStorageStage: (cb: (stageKey: string) => void) => () => void
       onScanProgress: (cb: (progress: { done: number; total: number }) => void) => () => void
       onWallpaper: (cb: (dataUrl: string) => void) => void
       onRescan: (cb: () => void) => void

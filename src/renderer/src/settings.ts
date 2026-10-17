@@ -1,4 +1,9 @@
+import { t } from './i18n'
+import { getStore, setStore } from './persist'
+
 export interface Settings {
+  // 语言
+  language: 'zh' | 'en'
   // 外观
   iconSize: number
   fontSize: number
@@ -21,7 +26,6 @@ export interface Settings {
   clickBlankToHide: boolean
   wheelPaging: boolean
   rememberPage: boolean
-  autoFocusSearch: boolean
   autoHideOnBlur: boolean
   dockVisible: boolean
   dockMagnify: boolean
@@ -31,6 +35,8 @@ export interface Settings {
   openSound: string
   /** 界面收起时播放的音效 id（'' = 不播） */
   closeSound: string
+  /** 翻页/滑动切换页时播放的音效 id（'' = 不播） */
+  pageSound: string
   // 快捷键与系统
   globalShortcut: string | null
   autoLaunch: boolean
@@ -73,12 +79,12 @@ export function cellKey(c: Cell): string {
   return c.k === 'folder' ? `f:${c.id}` : refKey(c)
 }
 export const BG_COLOR_PRESETS: { value: string; text: string }[] = [
-  { value: '#241a12', text: '暖棕' },
-  { value: '#1a1a1e', text: '深空黑' },
-  { value: '#2b2b30', text: '石墨灰' },
-  { value: '#16213e', text: '午夜蓝' },
-  { value: '#14281d', text: '墨绿' },
-  { value: '#2b1618', text: '酒红' }
+  { value: '#241a12', text: 'colorWarmBrown' },
+  { value: '#1a1a1e', text: 'colorSpaceBlack' },
+  { value: '#2b2b30', text: 'colorGraphite' },
+  { value: '#16213e', text: 'colorMidnight' },
+  { value: '#14281d', text: 'colorInkGreen' },
+  { value: '#2b1618', text: 'colorWine' }
 ]
 
 export const ICON_RADIUS: Record<Settings['iconShape'], string> = {
@@ -89,12 +95,13 @@ export const ICON_RADIUS: Record<Settings['iconShape'], string> = {
 
 /** 可选音效（value 与 App.tsx 的 SOUND_URLS 键对应，'' 表示不播放） */
 export const SOUND_OPTIONS: { value: string; text: string }[] = [
-  { value: '', text: '无' },
-  { value: 'drop', text: '水滴' },
-  { value: 'notify', text: '通知' }
+  { value: '', text: 'soundNone' },
+  { value: 'drop', text: 'soundDrop' },
+  { value: 'notify', text: 'soundNotify' }
 ]
 
 export const DEFAULT_SETTINGS: Settings = {
+  language: 'zh',
   iconSize: 72,
   fontSize: 13,
   blur: 60,
@@ -115,13 +122,13 @@ export const DEFAULT_SETTINGS: Settings = {
   clickBlankToHide: false,
   wheelPaging: true,
   rememberPage: false,
-  autoFocusSearch: true,
   autoHideOnBlur: false,
   dockVisible: true,
   dockMagnify: true,
   soundEnabled: false,
   openSound: 'drop',
   closeSound: 'notify',
+  pageSound: 'drop',
   // 唤起方式默认用鼠标中键（全局钩子）；键盘组合随时可在设置里重新录制
   globalShortcut: 'MouseMiddle',
   autoLaunch: false,
@@ -144,7 +151,7 @@ function isRef(x: unknown): x is Ref {
 /** 读取顶层网格；无数据返回 null（交由迁移逻辑生成） */
 export function loadGrid(): Cell[] | null {
   try {
-    const raw = localStorage.getItem(GRID_KEY)
+    const raw = getStore(GRID_KEY)
     if (!raw) return null
     const v = JSON.parse(raw)
     if (!Array.isArray(v)) return null
@@ -157,13 +164,13 @@ export function loadGrid(): Cell[] | null {
 }
 
 export function saveGrid(grid: Cell[]): void {
-  localStorage.setItem(GRID_KEY, JSON.stringify(grid))
+  setStore(GRID_KEY, JSON.stringify(grid))
 }
 
 /** 读取文件夹表 */
 export function loadFolders(): Folder[] {
   try {
-    const v = JSON.parse(localStorage.getItem(FOLDERS_KEY) || '[]')
+    const v = JSON.parse(getStore(FOLDERS_KEY) || '[]')
     if (!Array.isArray(v)) return []
     return v
       .filter((f) => f && typeof f.id === 'string' && typeof f.name === 'string' && Array.isArray(f.items))
@@ -174,7 +181,7 @@ export function loadFolders(): Folder[] {
 }
 
 export function saveFolders(folders: Folder[]): void {
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify(folders))
+  setStore(FOLDERS_KEY, JSON.stringify(folders))
 }
 
 export const APPTAGS_KEY = 'launchapp-apptags'
@@ -182,7 +189,7 @@ export const APPTAGS_KEY = 'launchapp-apptags'
 /** 视图 key -> 单一分类（每个条目只属于一个分类） */
 export function loadItemCat(): Record<string, string> {
   try {
-    const v = JSON.parse(localStorage.getItem(APPTAGS_KEY) || '{}')
+    const v = JSON.parse(getStore(APPTAGS_KEY) || '{}')
     if (!v || typeof v !== 'object') return {}
     const out: Record<string, string> = {}
     for (const k of Object.keys(v)) {
@@ -202,10 +209,26 @@ export function loadItemCat(): Record<string, string> {
   }
 }
 export function saveItemCat(map: Record<string, string>): void {
-  localStorage.setItem(APPTAGS_KEY, JSON.stringify(map))
+  setStore(APPTAGS_KEY, JSON.stringify(map))
 }
 
 export const CATS_KEY = 'launchapp-cats'
+
+/** "仅移除图标"记录的隐藏快捷方式路径（不删磁盘文件，只在启动器过滤掉） */
+export const HIDDEN_KEY = 'launchapp-hidden'
+
+export function loadHidden(): string[] {
+  try {
+    const v = JSON.parse(getStore(HIDDEN_KEY) || '[]')
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveHidden(lnks: string[]): void {
+  setStore(HIDDEN_KEY, JSON.stringify(lnks))
+}
 
 /** 应用与网址各自独立的分类池（可含暂无条目的分类） */
 export interface CategoryPools {
@@ -214,7 +237,7 @@ export interface CategoryPools {
 }
 export function loadCategories(): CategoryPools {
   try {
-    const v = JSON.parse(localStorage.getItem(CATS_KEY) || '{}')
+    const v = JSON.parse(getStore(CATS_KEY) || '{}')
     const pick = (x: unknown): string[] =>
       Array.isArray(x) ? x.filter((t): t is string => typeof t === 'string' && !!t) : []
     return { app: pick(v?.app), link: pick(v?.link) }
@@ -223,25 +246,25 @@ export function loadCategories(): CategoryPools {
   }
 }
 export function saveCategories(pools: CategoryPools): void {
-  localStorage.setItem(CATS_KEY, JSON.stringify(pools))
+  setStore(CATS_KEY, JSON.stringify(pools))
 }
 
 export function loadSettings(): Settings {
   try {
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(getStore(KEY) || '{}') }
   } catch {
     return { ...DEFAULT_SETTINGS }
   }
 }
 
 export function saveSettings(s: Settings): void {
-  localStorage.setItem(KEY, JSON.stringify(s))
+  setStore(KEY, JSON.stringify(s))
 }
 
 /** 读取已保存的网址列表 */
 export function loadLinks(): WebLink[] {
   try {
-    const v = JSON.parse(localStorage.getItem(LINKS_KEY) || '[]')
+    const v = JSON.parse(getStore(LINKS_KEY) || '[]')
     if (!Array.isArray(v)) return []
     return v
       .filter((x) => x && typeof x.url === 'string' && typeof x.name === 'string')
@@ -279,10 +302,10 @@ export function toAccelerator(e: KeyboardEvent): string | null {
 }
 
 const MOUSE_LABELS: Record<string, string> = {
-  MouseLeft: '鼠标左键',
-  MouseMiddle: '鼠标中键',
-  MouseBack: '鼠标侧键（后退）',
-  MouseForward: '鼠标侧键（前进）'
+  MouseLeft: 'mouseLeft',
+  MouseMiddle: 'mouseMiddle',
+  MouseBack: 'mouseBack',
+  MouseForward: 'mouseForward'
 }
 
 export function mouseAccelerator(e: MouseEvent): string | null {
@@ -297,7 +320,7 @@ export function isMouseAccelerator(accel: string): boolean {
 }
 
 export function displayShortcut(accel: string): string {
-  if (accel in MOUSE_LABELS) return MOUSE_LABELS[accel]
+  if (accel in MOUSE_LABELS) return t(MOUSE_LABELS[accel])
   return accel
     .replace('CommandOrControl', 'Ctrl')
     .replace('Super', 'Win')

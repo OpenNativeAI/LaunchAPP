@@ -4,6 +4,7 @@ import { spawn } from 'child_process'
 import { promises as fs } from 'fs'
 import { app } from 'electron'
 import { join } from 'path'
+import { t } from '../shared/i18n'
 
 export interface UninstallPlan {
   /** win32=注册表卸载命令；local=应用目录里的卸载器；store=商店应用；notfound=确实查不到 */
@@ -61,7 +62,7 @@ try {
     if ($target -and $target -like '*\WindowsApps\*') {
         $res = @{ kind = 'store'; displayName = $name; how = ''; cmd = '' }
     } elseif ($target -match '\{([0-9A-Fa-f-]{36})\}') {
-        $res = @{ kind = 'win32'; displayName = $name; how = '快捷方式里的 MSI 产品码'; cmd = ('MsiExec.exe /X{' + $matches[1] + '}') }
+        $res = @{ kind = 'win32'; displayName = $name; how = 'msi'; cmd = ('MsiExec.exe /X{' + $matches[1] + '}') }
     } elseif (-not $isSystem) {
         # 指向 System32 等系统目录的开始菜单项（注册表编辑器、任务管理器等）没有自己的卸载项，
         # 强行匹配只会撞上 Windows 组件，故整个跳过，让它们走 notfound。
@@ -84,27 +85,27 @@ try {
                 $ndl = $dn.ToLower()
                 $rank = 0
                 $how = ''
-                if ($ndl -eq $nl) { $rank = 1; $how = '注册表同名卸载项' }
+                if ($ndl -eq $nl) { $rank = 1; $how = 'rank1' }
                 if ($rank -eq 0 -and $tl) {
                     $di = [string]$p.DisplayIcon
                     if ($di) {
                         $dip = NormDir((($di -split ',')[0]).Trim('"'))
-                        if ($dip -eq $tl) { $rank = 2; $how = '注册表图标指向同一个程序' }
+                        if ($dip -eq $tl) { $rank = 2; $how = 'rank2' }
                     }
                 }
                 if ($rank -eq 0 -and $dir -and -not $isSystem) {
                     $il = NormDir([string]$p.InstallLocation)
-                    if ($il -and ($il -eq $dir)) { $rank = 3; $how = '注册表安装目录与它相同' }
+                    if ($il -and ($il -eq $dir)) { $rank = 3; $how = 'rank3' }
                     else {
                         $ue = ExeOfUs $us
                         if ($ue) {
                             $up = NormDir([string](Split-Path $ue -Parent))
-                            if ($up -eq $dir) { $rank = 4; $how = '注册表卸载程序就在它所在目录' }
+                            if ($up -eq $dir) { $rank = 4; $how = 'rank4' }
                         }
                     }
                 }
                 if ($rank -eq 0 -and $nl.Length -ge 4 -and (($ndl.Length -ge 4 -and $ndl.Contains($nl)) -or ($ndl.Length -ge 4 -and $nl.Contains($ndl)))) {
-                    $rank = 5; $how = '名称近似匹配（请核对下面要运行的卸载程序）'
+                    $rank = 5; $how = 'rank5'
                 }
                 if ($rank -gt 0 -and $rank -lt $bestRank) {
                     $bestRank = $rank
@@ -123,7 +124,7 @@ try {
                 $pick = $null
                 if ($stem) { $pick = @($cand | Where-Object { $_.BaseName.ToLower().Contains($stem) })[0] }
                 if (-not $pick) { $pick = @($cand | Sort-Object -Property Length -Descending)[0] }
-                $res = @{ kind = 'local'; displayName = $name; how = '它所在目录里的卸载器'; cmd = $pick.FullName }
+                $res = @{ kind = 'local'; displayName = $name; how = 'local'; cmd = $pick.FullName }
             }
         }
     }
@@ -148,9 +149,26 @@ function runPsFile(scriptPath: string, args: string[]): Promise<void> {
     child.stdout?.on('data', (c: string) => (stdout += c))
     child.on('error', reject)
     child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error((stdout + stderr).trim() || `PowerShell 退出码 ${code}`))
+      code === 0
+        ? resolve()
+        : reject(new Error((stdout + stderr).trim() || t('psExitCode', { code: code ?? '?' })))
     )
   })
+}
+
+/** 脚本只回传稳定代号，翻成当前语言的动作留给这里，避免中文散落在 PowerShell 模板里 */
+const HOW_KEY: Record<string, string> = {
+  msi: 'howMsi',
+  rank1: 'howSameName',
+  rank2: 'howDisplayIcon',
+  rank3: 'howInstallDir',
+  rank4: 'howUninstallerDir',
+  rank5: 'howFuzzy',
+  local: 'howLocalExe'
+}
+
+function howText(code: string | undefined): string {
+  return code ? t(HOW_KEY[code] ?? code) : ''
 }
 
 interface RawLookup {
@@ -172,7 +190,7 @@ async function lookup(lnk: string): Promise<RawLookup> {
 }
 
 /** 在真正动手前先查清楚会运行什么，让确认弹窗能把依据写明白 */
-export async function planUninstall(appName: string, lnk: string): Promise<UninstallPlan> {
+async function buildPlan(appName: string, lnk: string): Promise<UninstallPlan> {
   try {
     const f = await lookup(lnk)
     const kind = (['win32', 'store', 'local', 'failed'].includes(f.kind) ? f.kind : 'notfound') as
@@ -186,7 +204,7 @@ export async function planUninstall(appName: string, lnk: string): Promise<Unins
         displayName: '',
         how: '',
         cmd: '',
-        message: `查找卸载信息失败：${f.message || '未知错误'}`
+        message: t('errFindUninstall', { msg: f.message || t('unknownError') })
       }
     }
     if (kind === 'store') {
@@ -195,24 +213,24 @@ export async function planUninstall(appName: string, lnk: string): Promise<Unins
         displayName: appName,
         how: '',
         cmd: '',
-        message: `「${appName}」是 Microsoft Store 应用，只能由系统卸载。点「打开系统设置」到「设置 → 应用」里卸载，或者只从启动器移除图标。`
+        message: t('storeMsg', { name: appName })
       }
     }
     if (kind === 'local') {
       return {
         kind: 'local',
         displayName: appName,
-        how: f.how || '',
+        how: howText(f.how),
         cmd: f.cmd || '',
-        message: `注册表里没有它的卸载项，但它目录里有卸载器：\n${f.cmd}`
+        message: t('localMsg', { cmd: f.cmd || '' })
       }
     }
     return {
       kind: 'win32',
       displayName: f.displayName || appName,
-      how: f.how || '',
+      how: howText(f.how),
       cmd: f.cmd || '',
-      message: `匹配到「${f.displayName || appName}」的卸载命令`
+      message: t('matchedMsg', { name: f.displayName || appName })
     }
   } catch (e) {
     return {
@@ -220,7 +238,7 @@ export async function planUninstall(appName: string, lnk: string): Promise<Unins
       displayName: '',
       how: '',
       cmd: '',
-      message: `查找卸载信息失败：${e instanceof Error ? e.message : String(e)}`
+      message: t('errFindUninstall', { msg: e instanceof Error ? e.message : String(e) })
     }
   }
 }
@@ -277,7 +295,25 @@ async function runUninstaller(raw: string): Promise<void> {
   await runPsFile(scriptPath, [raw])
 }
 
+/** 查一次要冷启 PowerShell，同一图标短时间内反复打开弹窗就复用结果 */
+const PLAN_TTL_MS = 60000
+const planCache = new Map<string, { at: number; plan: UninstallPlan }>()
+
+function forgetUninstallPlan(lnk: string): void {
+  planCache.delete(lnk)
+}
+
+export async function planUninstall(appName: string, lnk: string): Promise<UninstallPlan> {
+  const hit = planCache.get(lnk)
+  if (hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan
+  const plan = await buildPlan(appName, lnk)
+  // 查失败多半是临时的，不缓存，下次打开弹窗会真的重试
+  if (plan.kind !== 'failed') planCache.set(lnk, { at: Date.now(), plan })
+  return plan
+}
+
 export async function removeShortcut(lnk: string): Promise<void> {
+  forgetUninstallPlan(lnk)
   await fs.rm(lnk, { force: true })
 }
 
@@ -295,14 +331,16 @@ async function shellOpen(target: string): Promise<void> {
 }
 
 export async function uninstallApp(appName: string, lnk: string): Promise<UninstallResult> {
-  const plan = await planUninstall(appName, lnk)
+  // 真动手前绕开缓存，按当下注册表状态重新查一遍
+  forgetUninstallPlan(lnk)
+  const plan = await buildPlan(appName, lnk)
   if (plan.kind !== 'win32' && plan.kind !== 'local') {
     return {
       ok: false,
       kind: plan.kind === 'failed' ? 'failed' : 'notfound',
       message:
         plan.kind === 'notfound'
-          ? `查过注册表三个卸载项和「${appName}」自己的安装目录，都没有它的卸载程序，它多半是绿色软件或系统组件。图标已保留，可点「仅移除图标」只从启动器移除。`
+          ? t('notfoundMsg', { name: appName })
           : plan.message
     }
   }
@@ -312,14 +350,14 @@ export async function uninstallApp(appName: string, lnk: string): Promise<Uninst
     return {
       ok: false,
       kind: 'failed',
-      message: `卸载程序启动失败：${e instanceof Error ? e.message : String(e)}`
+      message: t('errStartUninstaller', { msg: e instanceof Error ? e.message : String(e) })
     }
   }
   await fs.rm(lnk, { force: true })
-  const who = plan.kind === 'local' ? `${appName}（${plan.how}）` : plan.displayName
+  const who = plan.kind === 'local' ? `${appName} (${plan.how})` : plan.displayName
   return {
     ok: true,
     kind: plan.kind,
-    message: `已按「${plan.how}」启动 ${who} 的卸载程序，请在弹出的窗口中完成卸载。图标已从启动器移除。`
+    message: t('uninstallStarted', { how: plan.how, name: who })
   }
 }

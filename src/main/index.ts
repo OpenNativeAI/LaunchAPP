@@ -15,7 +15,7 @@ import { execFile, spawn } from 'child_process'
 import { uIOhook } from 'uiohook-napi'
 import { promises as fs } from 'fs'
 import { pathToFileURL } from 'url'
-import { join } from 'path'
+import { join, sep } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { scanApps, clearIconCache, type AppInfo } from './scanner'
@@ -28,12 +28,14 @@ import {
   type UninstallResult
 } from './uninstall'
 import { fetchLinkMeta, normalizeUrl } from './links'
+import { t, setLang } from '../shared/i18n'
 import { detectBrowsers, openWithBrowser, type BrowserList } from './browsers'
 import {
   createLayout,
   migrateLegacyStorage,
   readStore,
   writeStore,
+  writeTextAtomic,
   type DataLayout
 } from './store'
 
@@ -58,10 +60,6 @@ let layoutCache: DataLayout | null = null
 function L(): DataLayout {
   if (!layoutCache) layoutCache = createLayout(app.getPath('userData'))
   return layoutCache
-}
-
-function getDataDir(): string {
-  return L().dataDir
 }
 
 /** 坏文件留档处，分析里单独成一组，不混进网址数据 */
@@ -153,27 +151,52 @@ async function dirStats(dir: string): Promise<{ count: number; size: number }> {
   return { count, size }
 }
 
-/** 递归统计目录下所有文件数量与总字节 */
-async function treeStats(dir: string): Promise<{ count: number; size: number }> {
-  let count = 0
-  let size = 0
+/** 一次遍历拿到清单，才能既分组又列出真正占地方的大文件 */
+async function walkFiles(
+  dir: string,
+  base: string,
+  depth: number
+): Promise<{ abs: string; rel: string; bytes: number }[]> {
+  const out: { abs: string; rel: string; bytes: number }[] = []
+  if (depth < 0) return out
   try {
     for (const e of await fs.readdir(dir, { withFileTypes: true })) {
-      const p2 = join(dir, e.name)
-      if (e.isDirectory()) {
-        const sub = await treeStats(p2)
-        count += sub.count
-        size += sub.size
-      } else if (e.isFile()) {
-        count += 1
-        size += await statSize(p2)
-      }
+      // 跳过链接：junction 会让遍历绕回自己，统计到死
+      if (e.isSymbolicLink()) continue
+      const abs = join(dir, e.name)
+      const rel = base ? `${base}/${e.name}` : e.name
+      if (e.isDirectory()) out.push(...(await walkFiles(abs, rel, depth - 1)))
+      else if (e.isFile()) out.push({ abs, rel, bytes: await statSize(abs) })
     }
   } catch {
-    /* 目录不存在时按 0 处理 */
+    /* 目录不存在时按空处理 */
   }
-  return { count, size }
+  return out
 }
+
+const GROUP_LABELS: Record<string, string> = {
+  icons: 'sgIconCache',
+  grid: 'sgAppGrid',
+  links: 'sgLinks',
+  settings: 'sgSettings',
+  recovered: 'recoveredLabel',
+  runtime: 'sgRuntime',
+  other: 'sgOther'
+}
+
+/** data/ 之外的那堆根目录是 Electron 自己的运行缓存，占了体积大头却从不进报表 */
+function groupId(rel: string, abs: string, d: DataLayout): string {
+  if (rel.startsWith('data/')) {
+    if (abs.startsWith(d.iconsDir + sep)) return 'icons'
+    if (abs.startsWith(d.websiteDir + sep)) return 'links'
+    if (abs.startsWith(d.recoveryDir + sep)) return 'recovered'
+    if (abs === d.settingsFile) return 'settings'
+    if (abs === d.appFile || abs === d.appsCacheFile) return 'grid'
+    return 'other'
+  }
+  return rel.includes('/') ? 'runtime' : 'other'
+}
+
 
 async function showWindow(): Promise<void> {
   if (!mainWindow) createWindow()
@@ -283,21 +306,27 @@ function registerShortcut(accel: string | null): boolean {
   return ok
 }
 
-function createTray(): void {
-  if (tray) return
-  tray = new Tray(icon)
-  tray.setToolTip('LaunchApp 启动器')
+/** 托盘文案只能在主进程里翻译，语言变化后要整份重建 */
+function refreshTray(): void {
+  if (!tray) return
+  tray.setToolTip(t('trayTooltip'))
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '打开启动器', click: () => void showWindow() },
+      { label: t('trayOpen'), click: () => void showWindow() },
       {
-        label: '重新扫描应用',
+        label: t('trayRescan'),
         click: () => mainWindow?.webContents.send('apps:rescan')
       },
       { type: 'separator' },
-      { label: '退出', click: () => app.quit() }
+      { label: t('trayQuit'), click: () => app.quit() }
     ])
   )
+}
+
+function createTray(): void {
+  if (tray) return
+  tray = new Tray(icon)
+  refreshTray()
   tray.on('click', () => void showWindow())
 }
 
@@ -363,9 +392,26 @@ app.whenReady().then(async () => {
   ipcMain.handle('apps:scan', async (e, force = false) => {
     if (force) await clearIconCache()
     const sender = e.sender
-    return scanApps((done, total) => {
+    const list = await scanApps((done, total) => {
       sender.send('apps:progress', { done, total })
     })
+    await writeTextAtomic(L().appsCacheFile, JSON.stringify(list)).catch(() => undefined)
+    return list
+  })
+
+  /** 上次扫描的落盘结果：开机先铺这个，后台再静默重扫，省掉全屏转圈 */
+  ipcMain.handle('apps:cached', async (): Promise<AppInfo[]> => {
+    try {
+      const list = JSON.parse(await fs.readFile(L().appsCacheFile, 'utf8')) as AppInfo[]
+      if (!Array.isArray(list)) return []
+      const names = new Set(await fs.readdir(L().iconsDir))
+      // 图标文件已经不在了的条目直接滤掉，免得渲染成破图
+      return list.filter(
+        (a) => a && typeof a.lnk === 'string' && typeof a.name === 'string' && (!a.iconFile || names.has(a.iconFile))
+      )
+    } catch {
+      return []
+    }
   })
 
   ipcMain.handle('apps:launch', async (_e, info: AppInfo) => {
@@ -419,13 +465,18 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('store:read', (): Promise<Record<string, string> | null> => readStore(L()))
 
-  ipcMain.handle(
-    'store:write',
-    (_e, data: Record<string, string>): Promise<boolean> => writeStore(L(), data)
-  )
+  // 渲染层现在按单个键频繁写，串行执行，避免两次 read-merge-write 互相覆盖
+  let storeWrites: Promise<unknown> = Promise.resolve()
+  ipcMain.handle('store:write', (_e, data: Record<string, string | null>): Promise<boolean> => {
+    const next = storeWrites
+      .catch(() => undefined)
+      .then(() => writeStore(L(), data))
+    storeWrites = next.catch(() => undefined)
+    return next
+  })
 
   ipcMain.handle('storage:info', async () => {
-    const dir = getDataDir()
+    const dir = L().userDataDir
     const iconsDir = L().iconsDir
     const settingsFile = L().settingsFile
     const icons = await dirStats(iconsDir)
@@ -439,63 +490,76 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('ui:lang', (_e, lang: unknown): void => {
+    setLang(lang === 'en' ? 'en' : 'zh')
+    refreshTray()
+  })
+
   ipcMain.handle('storage:analyze', async (_e, referenced: unknown) => {
     // 渲染层还没扫完应用列表时传 null：此时图标文件名不在手上，报孤儿会把全部缓存说成残留
     const used = Array.isArray(referenced)
       ? new Set(referenced.filter((x): x is string => typeof x === 'string'))
       : null
-    const groups: { label: string; bytes: number; files: number }[] = []
-    const icons = await dirStats(L().iconsDir)
-    groups.push({ label: '应用图标缓存', bytes: icons.size, files: icons.count })
-    const appBytes = await statSize(L().appFile)
-    groups.push({ label: '应用排列数据', bytes: appBytes, files: appBytes > 0 ? 1 : 0 })
-    const site = await dirStats(L().websiteDir)
-    groups.push({ label: '网址数据', bytes: site.size, files: site.count })
-    const setBytes = await statSize(L().settingsFile)
-    groups.push({ label: '设置', bytes: setBytes, files: setBytes > 0 ? 1 : 0 })
-    const rec = await dirStats(getRecoveryDir())
-    if (rec.count > 0) groups.push({ label: '损坏留档', bytes: rec.size, files: rec.count })
+    const d = L()
+    const stage = (key: string): void => mainWindow?.webContents.send('storage:stage', key)
 
-    const tree = await treeStats(getDataDir())
-    const knownBytes = groups.reduce((s, g) => s + g.bytes, 0)
-    const knownFiles = groups.reduce((s, g) => s + g.files, 0)
-    if (tree.size - knownBytes > 0) {
-      groups.push({
-        label: '其他',
-        bytes: tree.size - knownBytes,
-        files: Math.max(0, tree.count - knownFiles)
-      })
+    stage('saStageWalk')
+    const files = (await walkFiles(app.getPath('userData'), '', 8)).map((f) => ({
+      ...f,
+      group: groupId(f.rel, f.abs, d)
+    }))
+
+    const acc = new Map<string, { bytes: number; files: number }>()
+    for (const f of files) {
+      const g = acc.get(f.group)
+      if (g) {
+        g.bytes += f.bytes
+        g.files += 1
+      } else acc.set(f.group, { bytes: f.bytes, files: 1 })
     }
+    const groups = [...acc]
+      .map(([id, v]) => ({ id, label: t(GROUP_LABELS[id] ?? 'sgOther'), bytes: v.bytes, files: v.files }))
+      .sort((a, b) => b.bytes - a.bytes)
 
-    const orphan: string[] = []
+    const total = files.reduce((s, f) => s + f.bytes, 0)
+    stage('saStageTop')
+    const top = files
+      .slice()
+      .sort((a, b) => b.bytes - a.bytes)
+      .slice(0, 6)
+      .map((f) => ({ path: f.rel, bytes: f.bytes, group: f.group }))
+
     let orphanBytes = 0
+    let orphan: string[] | null = null
     if (used) {
+      stage('saStageOrphan')
+      orphan = []
       try {
-        const iconsDir = L().iconsDir
-        for (const e of await fs.readdir(iconsDir, { withFileTypes: true })) {
+        for (const e of await fs.readdir(d.iconsDir, { withFileTypes: true })) {
           if (!e.isFile() || used.has(e.name)) continue
           orphan.push(e.name)
-          orphanBytes += await statSize(join(iconsDir, e.name))
+          orphanBytes += await statSize(join(d.iconsDir, e.name))
         }
       } catch {
         /* 图标目录还没生成 */
       }
+      orphan.sort()
     }
-    orphan.sort()
 
     return {
-      dir: getDataDir(),
-      total: tree.size,
-      files: tree.count,
-      groups: groups.sort((a, b) => b.bytes - a.bytes),
+      dir: app.getPath('userData'),
+      total,
+      files: files.length,
+      groups,
+      top,
       // null = 应用列表还没就绪，本次不做残留判定
-      orphans: used ? { count: orphan.length, bytes: orphanBytes, sample: orphan.slice(0, 6) } : null
+      orphans: orphan ? { count: orphan.length, bytes: orphanBytes, sample: orphan.slice(0, 6) } : null
     }
   })
 
   ipcMain.handle('storage:open', async (_e, target: 'root' | 'icons' | 'recovered'): Promise<string> => {
     const dir =
-      target === 'icons' ? L().iconsDir : target === 'recovered' ? getRecoveryDir() : getDataDir()
+      target === 'icons' ? L().iconsDir : target === 'recovered' ? getRecoveryDir() : L().userDataDir
     // 本窗口是全屏置顶的，不先收起就会盖住资源管理器
     hideWindow()
     return shell.openPath(dir)
