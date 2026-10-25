@@ -44,6 +44,31 @@ body,
   z-index: 1;
 }
 
+/* 半透磨砂：底色用选中的颜色，桌面图只留色温不认细节 */
+.launchpad.bg-fog {
+  background: var(--bg-color, #241a12);
+}
+
+.bg-fog .wallpaper {
+  filter: blur(var(--blur, 60px)) saturate(0.45) brightness(1.12);
+  opacity: 0.38;
+}
+
+/* 罩在 dim 之上、图标之下（同为 z-index 1，靠 DOM 顺序压过 dim） */
+.fog {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.09),
+    rgba(255, 255, 255, 0.03) 55%,
+    rgba(255, 255, 255, 0.06)
+  );
+  backdrop-filter: blur(14px) saturate(1.05);
+}
+
 .topbar {
   position: relative;
   z-index: 3;
@@ -82,6 +107,52 @@ body,
 .gear.active {
   background: none;
   color: rgba(255, 255, 255, 0.7);
+}
+
+.refresh {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: rgba(255, 255, 255, 0.32);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.refresh svg {
+  width: 15px;
+  height: 15px;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35));
+}
+
+.refresh:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.refresh:disabled {
+  cursor: default;
+}
+
+.refresh.scanning svg {
+  animation: spin 0.9s linear infinite;
+}
+
+.scan-note {
+  position: absolute;
+  top: 58px;
+  right: 28px;
+  z-index: 4;
+  max-width: 360px;
+  text-align: right;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+  animation: fade-in 0.2s ease;
 }
 
 .search {

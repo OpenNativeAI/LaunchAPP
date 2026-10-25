@@ -10,7 +10,7 @@ export interface Settings {
   blur: number
   dim: number
   anim: number
-  bgStyle: 'wallpaper' | 'solid'
+  bgStyle: 'wallpaper' | 'solid' | 'fog'
   bgColor: string
   iconShape: 'rounded' | 'square' | 'circle'
   showAppNames: boolean
@@ -39,6 +39,8 @@ export interface Settings {
   pageSound: string
   // 快捷键与系统
   globalShortcut: string | null
+  /** 窗口打开时用鼠标侧键切换应用/网址视图 */
+  mouseSideNav: boolean
   autoLaunch: boolean
   // 应用
   hideSystemApps: boolean
@@ -131,7 +133,9 @@ export const DEFAULT_SETTINGS: Settings = {
   pageSound: 'drop',
   // 唤起方式默认用鼠标中键（全局钩子）；键盘组合随时可在设置里重新录制
   globalShortcut: 'MouseMiddle',
-  autoLaunch: false,
+  mouseSideNav: true,
+  // 常驻型启动器默认就该开机起来待在托盘，不想要可在设置「系统」里关掉
+  autoLaunch: true,
   hideSystemApps: false,
   appSort: 'custom',
   linksEnabled: true,

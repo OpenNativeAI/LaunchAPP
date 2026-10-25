@@ -25,6 +25,12 @@ interface AppInfo {
   iconFile: string
 }
 
+interface AutoLaunchState {
+  openAtLogin: boolean
+  path: string
+  error?: string
+}
+
 interface LinkMeta {
   url: string
   title: string
@@ -87,7 +93,10 @@ declare global {
       startMouseCapture: () => Promise<boolean>
       stopMouseCapture: () => Promise<void>
       onMouseCaptured: (cb: (button: number) => void) => () => void
-      setAutoLaunch: (enabled: boolean) => Promise<boolean>
+      setMouseNav: (enabled: boolean) => Promise<boolean>
+      onMouseNavigate: (cb: (view: 'app' | 'link') => void) => () => void
+      setAutoLaunch: (enabled: boolean) => Promise<AutoLaunchState>
+      getAutoLaunch: () => Promise<AutoLaunchState>
       onStorageStage: (cb: (stageKey: string) => void) => () => void
       onScanProgress: (cb: (progress: { done: number; total: number }) => void) => () => void
       onWallpaper: (cb: (dataUrl: string) => void) => void

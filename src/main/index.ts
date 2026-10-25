@@ -56,6 +56,24 @@ if (!gotLock) {
   app.quit()
 }
 
+/** 开机自启会带 --hidden：只驻留托盘，别把全屏界面弹出来挡在桌面上 */
+const startHidden = process.argv.includes('--hidden')
+
+interface AutoLaunchResult {
+  openAtLogin: boolean
+  path: string
+  error?: string
+}
+
+/** 读回登录项真实状态；args 要和写入时一致才匹配得上 */
+function readAutoLaunch(): boolean {
+  try {
+    return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin
+  } catch {
+    return false
+  }
+}
+
 let layoutCache: DataLayout | null = null
 function L(): DataLayout {
   if (!layoutCache) layoutCache = createLayout(app.getPath('userData'))
@@ -231,6 +249,8 @@ let uiohookListenerBound = false
 let mouseButtonActive: number | null = null
 // 录入模式：为 true 时，钩子把按下的鼠标键回报给渲染层，而不是触发唤起
 let mouseCaptureActive = false
+// 窗口打开时用鼠标侧键切视图；钩子必须一直转，靠可见性判断要不要发事件
+let mouseNavActive = false
 
 function ensureUiohook(): boolean {
   bindUiohookListener()
@@ -246,6 +266,9 @@ function ensureUiohook(): boolean {
   }
 }
 
+// uiohook 编码：4 后退侧键 → 网址，5 前进侧键 → 应用
+const MOUSE_NAV_VIEWS: Record<number, 'app' | 'link'> = { 4: 'link', 5: 'app' }
+
 function bindUiohookListener(): void {
   if (uiohookListenerBound) return
   uIOhook.on('mousedown', (e) => {
@@ -253,15 +276,21 @@ function bindUiohookListener(): void {
       mainWindow?.webContents.send('shortcut:mouse-captured', e.button)
       return
     }
-    if (mouseButtonActive !== null && e.button === mouseButtonActive) toggleSummon()
+    if (mouseButtonActive !== null && e.button === mouseButtonActive) {
+      toggleSummon()
+      return
+    }
+    const view = MOUSE_NAV_VIEWS[e.button as number]
+    if (mouseNavActive && view !== undefined && mainWindow?.isVisible()) {
+      mainWindow.webContents.send('mouse:navigate', view)
+    }
   })
   uiohookListenerBound = true
 }
 
 // 返回 true=鼠标钩子已就绪（或无需钩子）；false=需要钩子但启动失败
-function setMouseSummon(button: number | null): boolean {
-  mouseButtonActive = button
-  if (button === null) {
+function syncMouseHook(): boolean {
+  if (mouseButtonActive === null && !mouseNavActive) {
     if (uiohookRunning) {
       try {
         uIOhook.stop()
@@ -273,6 +302,11 @@ function setMouseSummon(button: number | null): boolean {
     return true
   }
   return ensureUiohook()
+}
+
+function setMouseSummon(button: number | null): boolean {
+  mouseButtonActive = button
+  return syncMouseHook()
 }
 
 function stopMouseSummon(): void {
@@ -353,6 +387,8 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', async () => {
     const wallpaper = await captureWallpaper()
     mainWindow?.webContents.send('wallpaper', wallpaper)
+    // 开机自启时壁纸先备好，窗口不显示，等托盘/唤起键再弹
+    if (startHidden) return
     mainWindow?.show()
     // 首次出现也通知渲染层（用于播放"启动"音效）
     mainWindow?.webContents.send('window:shown')
@@ -580,24 +616,38 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('shortcut:capture-stop', () => {
     mouseCaptureActive = false
-    // 未配置鼠标唤起时，关掉钩子省资源
-    if (!currentShortcut || MOUSE_BUTTON_CODES[currentShortcut] === undefined) {
-      if (uiohookRunning) {
-        try {
-          uIOhook.stop()
-        } catch {
-          /* ignore */
-        }
-        uiohookRunning = false
-      }
-    }
-    return true
+    // 既没配鼠标唤起、也没开侧键导航时，关掉钩子省资源
+    return syncMouseHook()
   })
 
-  ipcMain.handle('autolaunch:set', (_e, enabled: boolean) => {
-    app.setLoginItemSettings({ openAtLogin: enabled, args: ['--hidden'] })
-    return true
+  ipcMain.handle('mouse-nav:set', (_e, enabled: unknown): boolean => {
+    mouseNavActive = enabled === true
+    return syncMouseHook()
   })
+
+  // 注册表登录项会被安全软件拦掉，所以写完立刻读回，界面显示真实状态
+  ipcMain.handle('autolaunch:set', (_e, enabled: unknown): AutoLaunchResult => {
+    const openAtLogin = enabled === true
+    if (!app.isPackaged) {
+      return { openAtLogin: false, path: process.execPath, error: t('autoLaunchDevOnly') }
+    }
+    try {
+      app.setLoginItemSettings({ openAtLogin, args: ['--hidden'] })
+    } catch (err) {
+      return { openAtLogin: false, path: process.execPath, error: String(err) }
+    }
+    const actual = readAutoLaunch()
+    if (openAtLogin && !actual) {
+      return { openAtLogin: false, path: process.execPath, error: t('autoLaunchBlocked') }
+    }
+    return { openAtLogin: actual, path: process.execPath }
+  })
+
+  ipcMain.handle('autolaunch:get', (): AutoLaunchResult => ({
+    openAtLogin: readAutoLaunch(),
+    path: process.execPath,
+    ...(app.isPackaged ? {} : { error: t('autoLaunchDevOnly') })
+  }))
 
   app.on('second-instance', () => void showWindow())
 

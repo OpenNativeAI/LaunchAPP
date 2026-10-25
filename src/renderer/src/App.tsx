@@ -516,6 +516,9 @@ function TagEditor({
 
 function App(): JSX.Element {
   const [apps, setApps] = useState<AppInfo[]>([])
+  // 刷新结果提示（9 秒后自动消失）
+  const [scanNote, setScanNote] = useState<string | null>(null)
+  const scanNoteTimer = useRef<number>(0)
   const [progress, setProgress] = useState<Progress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -615,20 +618,32 @@ function App(): JSX.Element {
     })
   }, [])
 
-  const startScan = useCallback(async (force = false, silent = false): Promise<void> => {
+  const startScan = useCallback(async (force = false, silent = false): Promise<AppInfo[]> => {
     setError(null)
     silentScanRef.current = silent
     if (!silent) setProgress({ done: 0, total: 0 })
     try {
       const list = await window.api.scanApps(force)
       setApps(list)
+      return list
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      return []
     } finally {
       silentScanRef.current = false
       setProgress(null)
     }
   }, [])
+
+  // 顶栏刷新：扫完直接告诉用户结果，别让"没反应"和"真的没有"长得一样
+  const refreshApps = useCallback(async (): Promise<void> => {
+    const before = apps.length
+    const list = await startScan(false)
+    const added = list.length - before
+    setScanNote(added > 0 ? t('scanNew', { n: added }) : t('scanNone'))
+    if (scanNoteTimer.current) clearTimeout(scanNoteTimer.current)
+    scanNoteTimer.current = window.setTimeout(() => setScanNote(null), 9000)
+  }, [apps.length, startScan])
 
   useEffect(() => {
     const off = window.api.onScanProgress((p) => {
@@ -712,6 +727,28 @@ function App(): JSX.Element {
   useEffect(() => {
     window.api.setAutoLaunch(settings.autoLaunch).catch(() => undefined)
   }, [settings.autoLaunch])
+
+  // 侧键导航只在网址视图可用时才有意义；关掉时顺手把钩子让出来
+  useEffect(() => {
+    const on = settings.mouseSideNav && settings.linksEnabled
+    window.api.setMouseNav(on).catch(() => undefined)
+    if (!on) return
+    const onNav = (view: 'app' | 'link'): void => setFilter(view)
+    // Chromium 把侧键当浏览器前进/后退，抢在默认行为前吃掉
+    const blockDefault = (e: MouseEvent): void => {
+      if (e.button === 3 || e.button === 4) e.preventDefault()
+    }
+    window.addEventListener('pointerdown', blockDefault, true)
+    window.addEventListener('mouseup', blockDefault, true)
+    window.addEventListener('auxclick', blockDefault, true)
+    const off = window.api.onMouseNavigate(onNav)
+    return () => {
+      window.removeEventListener('pointerdown', blockDefault, true)
+      window.removeEventListener('mouseup', blockDefault, true)
+      window.removeEventListener('auxclick', blockDefault, true)
+      off()
+    }
+  }, [settings.mouseSideNav, settings.linksEnabled])
 
   const dismiss = useCallback((): void => {
     if (settings.closeQuits) window.api.quitApp()
@@ -1694,10 +1731,11 @@ function App(): JSX.Element {
       onWheel={onWheel}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {settings.bgStyle === 'wallpaper' && wallpaper && (
+      {settings.bgStyle !== 'solid' && wallpaper && (
         <img className="wallpaper" src={wallpaper} alt="" draggable={false} />
       )}
-      {settings.bgStyle === 'wallpaper' && <div className="dim" />}
+      {settings.bgStyle !== 'solid' && <div className="dim" />}
+      {settings.bgStyle === 'fog' && <div className="fog" />}
 
       <header className="topbar">
         {settings.showClock && <Clock />}
@@ -1722,6 +1760,19 @@ function App(): JSX.Element {
           />
         </div>
         <div className="topbar-right">
+          <button
+            type="button"
+            className={scanning ? 'refresh scanning' : 'refresh'}
+            onClick={() => void refreshApps()}
+            disabled={scanning}
+            title={t('refreshHint')}
+            aria-label={t('refresh')}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+              <path d="M20 4v4h-4" />
+            </svg>
+          </button>
           {!query && (filter === 'link' ? linkTagNames : appTagNames).length > 0 && (
             <Dropdown
               value={activeTag ?? ''}
@@ -1757,6 +1808,7 @@ function App(): JSX.Element {
             <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h0a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56h0a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v0a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z" />
           </svg>
         </button>
+        {scanNote && !scanning && <div className="scan-note">{scanNote}</div>}
       </header>
 
 

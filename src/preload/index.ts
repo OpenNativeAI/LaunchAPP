@@ -11,6 +11,12 @@ export interface AppInfo {
   iconFile: string
 }
 
+export interface AutoLaunchState {
+  openAtLogin: boolean
+  path: string
+  error?: string
+}
+
 export interface UninstallPlan {
   kind: 'win32' | 'store' | 'local' | 'notfound' | 'failed'
   displayName: string
@@ -101,8 +107,15 @@ const api = {
     ipcRenderer.on('shortcut:mouse-captured', listener)
     return () => ipcRenderer.removeListener('shortcut:mouse-captured', listener)
   },
-  setAutoLaunch: (enabled: boolean): Promise<boolean> =>
+  setMouseNav: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('mouse-nav:set', enabled),
+  onMouseNavigate: (cb: (view: 'app' | 'link') => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, view: 'app' | 'link'): void => cb(view)
+    ipcRenderer.on('mouse:navigate', listener)
+    return () => ipcRenderer.removeListener('mouse:navigate', listener)
+  },
+  setAutoLaunch: (enabled: boolean): Promise<AutoLaunchState> =>
     ipcRenderer.invoke('autolaunch:set', enabled),
+  getAutoLaunch: (): Promise<AutoLaunchState> => ipcRenderer.invoke('autolaunch:get'),
   onScanProgress: (cb: (progress: { done: number; total: number }) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, progress: { done: number; total: number }): void =>
       cb(progress)

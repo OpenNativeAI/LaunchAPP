@@ -146,6 +146,7 @@ function Dropdown<T extends string | number>({
 }
 
 type BrowserList = Awaited<ReturnType<typeof window.api.listBrowsers>>
+type AutoLaunchState = Awaited<ReturnType<typeof window.api.getAutoLaunch>>
 
 /** 打开网址用哪个浏览器：默认跟随系统，也可手动指定计算机上已装的浏览器 */
 function LinkBrowserRow({
@@ -216,6 +217,42 @@ function Toggle({
         <span className="knob" />
       </button>
     </div>
+  )
+}
+
+function AutoLaunchRow({
+  checked,
+  onChange
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+}): JSX.Element {
+  const [actual, setActual] = useState<AutoLaunchState | null>(null)
+  const sync = (v: boolean): void => {
+    onChange(v)
+    void window.api
+      .setAutoLaunch(v)
+      .then(setActual)
+      .catch(() => setActual(null))
+  }
+  useEffect(() => {
+    void window.api
+      .getAutoLaunch()
+      .then(setActual)
+      .catch(() => setActual(null))
+  }, [])
+  return (
+    <>
+      <Toggle label={t('autoLaunch')} checked={checked} onChange={sync} />
+      {actual === null ? (
+        <div className="set-hint">{t('autoLaunchBlocked')}</div>
+      ) : (
+        <>
+          <div className="set-hint">{actual.error || (actual.openAtLogin ? t('autoLaunchOn') : t('autoLaunchOff'))}</div>
+          {actual.openAtLogin && <div className="set-hint">{t('autoLaunchPath', { n: actual.path })}</div>}
+        </>
+      )}
+    </>
   )
 }
 
@@ -533,11 +570,12 @@ export default function SettingsPanel({
                   value={settings.bgStyle}
                   options={[
                     { value: 'wallpaper', text: 'bgWallpaper' },
+                    { value: 'fog', text: 'bgFog' },
                     { value: 'solid', text: 'bgSolid' }
                   ]}
                   onChange={(v) => onChange({ bgStyle: v })}
                 />
-                {settings.bgStyle === 'solid' && (
+                {settings.bgStyle !== 'wallpaper' && (
                   <Dropdown
                     label={t('bgColor')}
                     value={settings.bgColor}
@@ -589,7 +627,7 @@ export default function SettingsPanel({
                   max={120}
                   step={2}
                   display={settings.blur === 0 ? t('off') : `${settings.blur}px`}
-                  disabled={settings.bgStyle !== 'wallpaper'}
+                  disabled={settings.bgStyle === 'solid'}
                   onChange={(v) => onChange({ blur: v })}
                 />
                 <Slider
@@ -598,7 +636,7 @@ export default function SettingsPanel({
                   min={0}
                   max={80}
                   display={`${Math.round(settings.dim * 100)}%`}
-                  disabled={settings.bgStyle !== 'wallpaper'}
+                  disabled={settings.bgStyle === 'solid'}
                   onChange={(v) => onChange({ dim: v / 100 })}
                 />
                 <Slider
@@ -733,11 +771,17 @@ export default function SettingsPanel({
                   value={settings.globalShortcut}
                   onCommit={(accel) => onChange({ globalShortcut: accel })}
                 />
-                <Toggle
-                  label={t('autoLaunch')}
+                <AutoLaunchRow
                   checked={settings.autoLaunch}
                   onChange={(v) => onChange({ autoLaunch: v })}
                 />
+                <Toggle
+                  label={t('mouseSideNav')}
+                  checked={settings.mouseSideNav}
+                  onChange={(v) => onChange({ mouseSideNav: v })}
+                />
+                <div className="set-hint">{t('mouseSideNavHint')}</div>
+                <div className="set-hint">{t('autoLaunchBootHint')}</div>
                 <div className="set-hint">{t('systemHint')}</div>
               </>
             )}
