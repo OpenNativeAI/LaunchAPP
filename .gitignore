@@ -9,3 +9,4 @@ release
 release2
 *.tsbuildinfo
 .qoder-frames
+dist-build
