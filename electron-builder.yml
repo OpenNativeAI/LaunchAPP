@@ -9,6 +9,11 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{dist,dist-build,release,release2}/**'
+  - '!{.qoder-frames,.base}/**'
+  - '!scripts/**'
+  - '!**/*.tsbuildinfo'
+  - '!{.sz.ps1,.unzip.ps1,.verify.ps1,.asarsize.js,.asartop.js}'
 asarUnpack:
   - resources/**
   - '**/node_modules/uiohook-napi/**'
@@ -18,6 +23,8 @@ nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
+  # 用户要求：卸载后用户数据目录（%APPDATA% 下的 launchapp：设置/排序/Dock/分类/logo/图标缓存）必须原样保留，重装即恢复
+  deleteAppDataOnUninstall: false
   createDesktopShortcut: always
 mac:
   entitlementsInherit: build/entitlements.mac.plist

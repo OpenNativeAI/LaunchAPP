@@ -33,7 +33,8 @@ body,
   width: calc(100% + 160px);
   height: calc(100% + 160px);
   object-fit: cover;
-  filter: blur(var(--blur, 60px)) saturate(1.2);
+  /* 模糊与饱和已在渲染前烘进这张小图（App.tsx 的 bakeWallpaper），
+     这里再挂 filter 等于每帧按半径重算一遍全屏像素 */
   z-index: 0;
 }
 
@@ -50,7 +51,7 @@ body,
 }
 
 .bg-fog .wallpaper {
-  filter: blur(var(--blur, 60px)) saturate(0.45) brightness(1.12);
+  /* 色相/亮度同样烘在小图里，这里只留透明度 */
   opacity: 0.38;
 }
 
@@ -66,7 +67,7 @@ body,
     rgba(255, 255, 255, 0.03) 55%,
     rgba(255, 255, 255, 0.06)
   );
-  backdrop-filter: blur(14px) saturate(1.05);
+  /* 不再叠 backdrop-filter：底下那张图本来就是糊的，再采一遍样只是每帧白烧一次 GPU */
 }
 
 .topbar {
@@ -208,6 +209,9 @@ body,
   display: flex;
   height: 100%;
   transition: transform 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+  /* 翻页只挪这一层：提前提升为合成层，几百个带阴影的图标光栅化一次即可，
+     否则每次过渡浏览器都要把整页重绘一遍 */
+  will-change: transform;
 }
 
 .grid {
@@ -241,6 +245,15 @@ body,
 
 .tile:active {
   transform: scale(0.96);
+}
+
+/* 点完图标别留那圈系统焦点框（强调色描边，看着像"选中态"其实只是 :focus）。
+   拖拽占位框和合并高亮是 .tile.dragging / .tile.merge-armed 自己画的，
+   选择器权重更高，不受这条影响 */
+button,
+button:focus,
+button:focus-visible {
+  outline: none;
 }
 
 .tile-icon {
@@ -1697,6 +1710,9 @@ body,
 /* ===== 长按抓起跟手拖影 ===== */
 .lp-ghost {
   position: fixed;
+  /* 位置由 JS 每次 dragover 直写 transform（含这组居中缩放），所以钉死在左上角 */
+  left: 0;
+  top: 0;
   z-index: 60;
   transform: translate(-50%, -58%) scale(1.18);
   pointer-events: none;

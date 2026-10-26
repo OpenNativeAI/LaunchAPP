@@ -4,6 +4,7 @@ import SettingsPanel from './SettingsPanel'
 import Dock, { type DockApp } from './Dock'
 import AddLinkModal from './AddLinkModal'
 import { t, setLang } from './i18n'
+import { bakeWallpaper } from './wallpaper'
 import dropSoundUrl from './assets/voice/drop.wav'
 import notifySoundUrl from './assets/voice/notify.wav'
 import {
@@ -161,17 +162,46 @@ interface FolderView {
 type View = AppView | LinkView | FolderView
 type LeafView = AppView | LinkView
 
+/**
+ * 视图对象按数据对象缓存：拖拽只改 grid，apps/links 数组原封不动，
+ * 于是同一批 AppInfo 拿到的永远是同一个 AppView —— GridTile 的 memo 这才有的可比。
+ * 否则每次重算 views 都是全新对象，几百个格子全量重渲染。
+ */
+const appViewCache = new WeakMap<AppInfo, AppView>()
 function appViewOf(a: AppInfo): AppView {
-  return {
-    key: 'a:' + a.lnk,
-    kind: 'app',
-    name: a.name,
-    iconUrl: a.iconFile ? 'appicon:///' + a.iconFile : '',
-    app: a
+  let v = appViewCache.get(a)
+  if (!v) {
+    v = {
+      key: 'a:' + a.lnk,
+      kind: 'app',
+      name: a.name,
+      iconUrl: a.iconFile ? 'appicon:///' + a.iconFile : '',
+      app: a
+    }
+    appViewCache.set(a, v)
   }
+  return v
 }
+const linkViewCache = new WeakMap<WebLink, LinkView>()
 function linkViewOf(l: WebLink): LinkView {
-  return { key: 'l:' + l.id, kind: 'link', name: l.name, iconUrl: l.icon, link: l }
+  let v = linkViewCache.get(l)
+  if (!v) {
+    v = { key: 'l:' + l.id, kind: 'link', name: l.name, iconUrl: l.icon, link: l }
+    linkViewCache.set(l, v)
+  }
+  return v
+}
+
+/** 拖影位置只写 transform，不走 React state（拖拽时 pointer 事件 60~125 次/秒） */
+function ghostTransform(x: number, y: number): string {
+  return 'translate3d(' + x + 'px, ' + y + 'px, 0) translate(-50%, -58%) scale(1.18)'
+}
+
+/** 跟手滑动的位移同理：算一次字符串，DOM 直接写 */
+function trackTransform(page: number, pageCount: number, dx: number): string {
+  return (
+    'translateX(calc(' + -page * (100 / pageCount) + '% + ' + dx + 'px))'
+  )
 }
 function viewToCell(v: View): Cell {
   if (v.kind === 'folder') return { k: 'folder', id: v.folderId }
@@ -188,9 +218,20 @@ function genFolderId(): string {
 function useGridLayout(settings: Settings): { cols: number; rows: number } {
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
   useEffect(() => {
-    const onResize = (): void => setSize({ w: window.innerWidth, h: window.innerHeight })
+    // 拖窗口边缘/最大化会连发 resize，每次都整屏重排一遍网格
+    let timer: number | null = null
+    const onResize = (): void => {
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = null
+        setSize({ w: window.innerWidth, h: window.innerHeight })
+      }, 120)
+    }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (timer !== null) window.clearTimeout(timer)
+    }
   }, [])
   if (!settings.autoGrid) return { cols: settings.cols, rows: settings.rows }
   const cell = Math.max(110, settings.iconSize + 46)
@@ -556,7 +597,9 @@ function App(): JSX.Element {
   })
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [armedKey, setArmedKey] = useState<string | null>(null)
-  const [lp, setLp] = useState<{ key: string; x: number; y: number } | null>(null)
+  const [ghostKey, setGhostKey] = useState<string | null>(null)
+  /** 拖影跟手靠直接写节点 transform，位置放 ref：每次 dragover 都 setState 会把整棵 App 打重渲染 */
+  const ghostPos = useRef({ x: 0, y: 0 })
   const [filter, setFilter] = useState<'all' | 'app' | 'link'>('app')
   const [page, setPageRaw] = useState(() => {
     const s = loadSettings()
@@ -564,7 +607,13 @@ function App(): JSX.Element {
     const saved = parseInt(getStore(LAST_PAGE_KEY) || '0', 10)
     return Number.isFinite(saved) ? saved : 0
   })
+  /** 原始截图（主进程缓存的那份）与"已经模糊好"的小图分开存，后者才是铺屏用的 */
   const [wallpaper, setWallpaper] = useState('')
+  const [wallpaperBg, setWallpaperBg] = useState('')
+  /** .track 与拖影的位置一律直写 DOM（下面两个 effect 负责翻页/起拖时的定位），
+      这样 React 从不参与 pointer 频率的更新，也不会把已经写好的 transform 冲掉 */
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const ghostRef = useRef<HTMLDivElement | null>(null)
   const [launchedId, setLaunchedId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; view: View } | null>(null)
@@ -583,11 +632,7 @@ function App(): JSX.Element {
   const pageSize = cols * rows
 
   const setPage = useCallback((updater: number | ((p: number) => number)): void => {
-    setPageRaw((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater
-      setStore(LAST_PAGE_KEY, String(next))
-      return next
-    })
+    setPageRaw((prev) => (typeof updater === 'function' ? updater(prev) : updater))
   }, [])
 
   // 用户主动翻页（滚轮/方向键/滑动/页码点击）：仅当页码真的变了才播翻页音效
@@ -611,12 +656,35 @@ function App(): JSX.Element {
   )
 
   const patchSettings = useCallback((patch: Partial<Settings>): void => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch }
-      saveSettings(next)
-      return next
-    })
+    setSettings((prev) => ({ ...prev, ...patch }))
   }, [])
+  // updater 必须是纯函数：落盘挪到 effect，StrictMode 双跑也不会重复写
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (!hydratedRef.current) {
+      hydratedRef.current = true
+      return
+    }
+    saveSettings(settings)
+  }, [settings])
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    setStore(LAST_PAGE_KEY, String(page))
+  }, [page])
+  // 底色模糊只在这几项真的变了才重算一次小图，滑杆拖动过程中先按住
+  useEffect(() => {
+    if (!wallpaper || settings.bgStyle === 'solid') return
+    let stale = false
+    const timer = window.setTimeout(() => {
+      void bakeWallpaper(wallpaper, settings.blur, settings.bgStyle).then((url) => {
+        if (!stale) setWallpaperBg(url)
+      })
+    }, 120)
+    return () => {
+      stale = true
+      window.clearTimeout(timer)
+    }
+  }, [wallpaper, settings.blur, settings.bgStyle])
 
   const startScan = useCallback(async (force = false, silent = false): Promise<AppInfo[]> => {
     setError(null)
@@ -1206,13 +1274,14 @@ function App(): JSX.Element {
     armedRef.current = null
     setDragKey(null)
     setArmedKey(null)
-    setLp(null)
+    setGhostKey(null)
   }, [clearMergeTimer])
 
   const onCellDragStart = useCallback((key: string, x: number, y: number): void => {
     dragKeyRef.current = key
+    ghostPos.current = { x, y }
     setDragKey(key)
-    setLp({ key, x, y })
+    setGhostKey(key)
   }, [])
 
   const onCellDragEnter = useCallback(
@@ -1268,7 +1337,9 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!dragKey) return
     const onOver = (e: DragEvent): void => {
-      setLp((cur) => (cur ? { key: cur.key, x: e.clientX, y: e.clientY } : { key: dragKey, x: e.clientX, y: e.clientY }))
+      ghostPos.current = { x: e.clientX, y: e.clientY }
+      const el = ghostRef.current
+      if (el) el.style.transform = ghostTransform(e.clientX, e.clientY)
     }
     window.addEventListener('dragover', onOver)
     return () => window.removeEventListener('dragover', onOver)
@@ -1534,8 +1605,20 @@ function App(): JSX.Element {
   // 抓页跟手滑动翻页：在空白处按住左键拖动，页面跟手平移，松手按阈值翻页或回弹
   const viewportRef = useRef<HTMLElement | null>(null)
   const pageDrag = useRef<{ startX: number; moved: boolean; onBlank: boolean } | null>(null)
-  const [dragPx, setDragPx] = useState(0)
+  const dragPx = useRef(0)
   const [dragging, setDragging] = useState(false)
+
+  /** 把 .track 摆到 page 页再偏移 dx：dx 走 ref + 直写 DOM，滑动过程中不重渲染 */
+  const applyTrack = useCallback(
+    (page: number, dx: number, animate: boolean): void => {
+      dragPx.current = dx
+      const el = trackRef.current
+      if (!el) return
+      el.style.transitionDuration = animate ? settings.anim + 'ms' : '0ms'
+      el.style.transform = trackTransform(page, pageCountRef.current, dx)
+    },
+    [settings.anim]
+  )
 
   const onViewportMouseDown = useCallback(
     (e: React.MouseEvent): void => {
@@ -1558,7 +1641,7 @@ function App(): JSX.Element {
         if (!st.moved) return
         // 首页向右 / 末页向左拖时阻尼回弹
         const atEdge = (startPage === 0 && dx > 0) || (startPage === pageCount - 1 && dx < 0)
-        setDragPx(atEdge ? dx * 0.35 : dx)
+        applyTrack(startPage, atEdge ? dx * 0.35 : dx, false)
       }
       const onUp = (ev: MouseEvent): void => {
         window.removeEventListener('mousemove', onMove)
@@ -1566,7 +1649,6 @@ function App(): JSX.Element {
         const st = pageDrag.current
         pageDrag.current = null
         setDragging(false)
-        setDragPx(0)
         if (!st) return
         if (!st.moved) {
           if (settings.clickBlankToHide && st.onBlank) dismiss()
@@ -1575,14 +1657,33 @@ function App(): JSX.Element {
         const dx = ev.clientX - st.startX
         const w = viewportRef.current?.clientWidth || window.innerWidth || 1
         const frac = dx / w
-        if (frac <= -0.18) turnPage(1)
-        else if (frac >= 0.18) turnPage(-1)
+        const last = pageCountRef.current - 1
+        // 先把 DOM 落到目标页让 CSS 过渡接手（从手指位置继续走），再改状态
+        if (frac <= -0.18) {
+          applyTrack(Math.min(startPage + 1, last), 0, true)
+          turnPage(1)
+        } else if (frac >= 0.18) {
+          applyTrack(Math.max(startPage - 1, 0), 0, true)
+          turnPage(-1)
+        } else {
+          applyTrack(startPage, 0, true)
+        }
       }
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
-    [settingsOpen, safePage, pageCount, settings.clickBlankToHide, dismiss, turnPage]
+    [settingsOpen, safePage, pageCount, settings.clickBlankToHide, dismiss, turnPage, applyTrack]
   )
+
+  useEffect(() => {
+    const el = trackRef.current
+    if (el) el.style.transform = trackTransform(safePage, pageCount, dragPx.current)
+  }, [safePage, pageCount])
+
+  useEffect(() => {
+    const el = ghostRef.current
+    if (el) el.style.transform = ghostTransform(ghostPos.current.x, ghostPos.current.y)
+  }, [ghostKey])
 
   const scanning = progress !== null
 
@@ -1732,7 +1833,7 @@ function App(): JSX.Element {
       onContextMenu={(e) => e.preventDefault()}
     >
       {settings.bgStyle !== 'solid' && wallpaper && (
-        <img className="wallpaper" src={wallpaper} alt="" draggable={false} />
+        <img className="wallpaper" src={wallpaperBg || wallpaper} alt="" draggable={false} />
       )}
       {settings.bgStyle !== 'solid' && <div className="dim" />}
       {settings.bgStyle === 'fog' && <div className="fog" />}
@@ -1848,14 +1949,9 @@ function App(): JSX.Element {
         onMouseDown={onViewportMouseDown}
       >
         <div
+          ref={trackRef}
           className="track"
           style={{
-            transform:
-              'translateX(calc(' +
-              -safePage * (100 / pageCount) +
-              '% + ' +
-              dragPx +
-              'px))',
             width: pageCount * 100 + '%',
             transitionDuration: dragging ? '0ms' : settings.anim + 'ms'
           }}
@@ -1911,10 +2007,10 @@ function App(): JSX.Element {
         </div>
       </main>
 
-      {lp && (
-        <div className="lp-ghost" style={{ left: lp.x, top: lp.y }}>
+      {ghostKey && (
+        <div className="lp-ghost" ref={ghostRef}>
           {(() => {
-            const v = views.find((x) => x.key === lp.key)
+            const v = views.find((x) => x.key === ghostKey)
             if (!v) return null
             if (v.kind === 'folder')
               return (

@@ -97,6 +97,17 @@ $lnks = foreach ($s in $sources) {
 }
 
 $shell = New-Object -ComObject WScript.Shell
+# 空白图标名单：Test-BlankPng 要逐像素 GetPixel，几百个缓存图标全过一遍能把一个核吃满，
+# 所以验过的 hash 记在 _verified.txt 里，下次扫描直接跳过
+$OkFile = Join-Path $IconDir '_verified.txt'
+$verified = @{}
+$okDirty = $false
+if (Test-Path -LiteralPath $OkFile) {
+    foreach ($line in (Get-Content -LiteralPath $OkFile)) {
+        $h = $line.Trim()
+        if ($h) { $verified[$h] = $true }
+    }
+}
 $apps = @()
 $seen = @{}
 foreach ($lnk in $lnks) {
@@ -138,7 +149,11 @@ foreach ($a in $apps) {
     }
     $hash = [BitConverter]::ToString([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes("$iconPath|$iconIdx|n2"))).Replace('-','').ToLower()
     $png = Join-Path $IconDir "$hash.png"
-    if ((Test-Path -LiteralPath $png) -and (Test-BlankPng $png)) { Remove-Item -LiteralPath $png }
+    if ($verified.ContainsKey($hash)) {
+        # 验过了，存在就能用
+    } elseif ((Test-Path -LiteralPath $png) -and (Test-BlankPng $png)) {
+        Remove-Item -LiteralPath $png
+    }
     if (-not (Test-Path -LiteralPath $png)) {
         $big = [IntPtr]::Zero; $small = [IntPtr]::Zero
         $r = [WinIcon]::SHDefExtractIconW($iconPath, $iconIdx, 0, [ref]$big, [ref]$small, 128)
@@ -165,9 +180,14 @@ foreach ($a in $apps) {
         }
         if ((Test-Path -LiteralPath $png) -and (Test-BlankPng $png)) { Remove-Item -LiteralPath $png }
         if (Test-Path -LiteralPath $png) { Normalize-Icon $png }
+        if (Test-Path -LiteralPath $png) { $verified[$hash] = $true; $okDirty = $true }
     }
     if (Test-Path -LiteralPath $png) { $a.iconFile = "$hash.png" }
     Write-Output "PROGRESS $i $total $($a.name)"
+}
+
+if ($okDirty) {
+    @($verified.Keys) | Out-File -LiteralPath $OkFile -Encoding ascii
 }
 
 ConvertTo-Json -InputObject @($apps) -Compress | Out-File -LiteralPath $OutFile -Encoding utf8

@@ -85,14 +85,24 @@ function getRecoveryDir(): string {
   return L().recoveryDir
 }
 
+/** 这张图只当模糊底色用，像素给多了纯属浪费：限到最长边 1280，PNG 编码与 IPC 载荷都小一个量级 */
+const WALLPAPER_MAX_EDGE = 1280
+let wallpaperCache = ''
+let wallpaperJob: Promise<string> | null = null
+let wallpaperTimer: NodeJS.Timeout | null = null
+let wallpaperSent = ''
+
 async function captureWallpaper(): Promise<string> {
   try {
     const display = screen.getPrimaryDisplay()
+    const w = display.size.width * display.scaleFactor
+    const h = display.size.height * display.scaleFactor
+    const k = Math.min(1, WALLPAPER_MAX_EDGE / Math.max(w, h, 1))
     const sources = await desktopCapturer.getSources({
       types: ['screen'],
       thumbnailSize: {
-        width: display.size.width * display.scaleFactor,
-        height: display.size.height * display.scaleFactor
+        width: Math.max(1, Math.round(w * k)),
+        height: Math.max(1, Math.round(h * k))
       }
     })
     const target = sources.find((s) => s.display_id === String(display.id)) || sources[0]
@@ -100,6 +110,44 @@ async function captureWallpaper(): Promise<string> {
   } catch {
     return ''
   }
+}
+
+/** 全屏截图 + PNG 编码 + 几 MB dataURL 过 IPC，正好压在唤起那一刻，是"点开就卡一下"的主因：只抓一次，之后用缓存 */
+async function getWallpaper(): Promise<string> {
+  if (wallpaperCache) return wallpaperCache
+  if (!wallpaperJob) {
+    wallpaperJob = captureWallpaper().then((v) => {
+      wallpaperJob = null
+      if (v) wallpaperCache = v
+      return v
+    })
+  }
+  return wallpaperJob
+}
+
+function emitWallpaper(url: string): void {
+  // 同一张图重复过 IPC 纯属浪费（dataURL 几百 KB 的结构化克隆），内容没变就不发
+  if (!url || url === wallpaperSent) return
+  wallpaperSent = url
+  mainWindow?.webContents.send('wallpaper', url)
+}
+
+async function pushWallpaper(): Promise<void> {
+  emitWallpaper(await getWallpaper())
+}
+
+/** 换桌面壁纸这种事还是要看得见，所以放到窗口隐藏之后慢慢补抓，不占唤起的路径 */
+function refreshWallpaperSoon(delay = 1200): void {
+  if (wallpaperTimer) return
+  wallpaperTimer = setTimeout(() => {
+    wallpaperTimer = null
+    void captureWallpaper().then((v) => {
+      if (v) {
+        wallpaperCache = v
+        emitWallpaper(v)
+      }
+    })
+  }, delay)
 }
 
 function splitArgs(input: string): string[] {
@@ -225,8 +273,8 @@ async function showWindow(): Promise<void> {
   mainWindow.focus()
   // 通知渲染层窗口已重新唤起（用于按设置重新聚焦搜索框等）
   mainWindow.webContents.send('window:shown')
-  const wallpaper = await captureWallpaper()
-  if (wallpaper) mainWindow.webContents.send('wallpaper', wallpaper)
+  void pushWallpaper()
+  refreshWallpaperSoon(4000)
 }
 
 function hideWindow(): void {
@@ -235,6 +283,8 @@ function hideWindow(): void {
   mainWindow.webContents.send('window:hidden')
   mainWindow.setAlwaysOnTop(false)
   mainWindow.hide()
+  // 收起后才补抓：用户换桌面壁纸时不至于永远是旧色温
+  refreshWallpaperSoon()
 }
 
 // uiohook 鼠标键编码：1 左 / 2 右 / 3 中 / 4 后退侧键 / 5 前进侧键
@@ -385,8 +435,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', async () => {
-    const wallpaper = await captureWallpaper()
-    mainWindow?.webContents.send('wallpaper', wallpaper)
+    await pushWallpaper()
     // 开机自启时壁纸先备好，窗口不显示，等托盘/唤起键再弹
     if (startHidden) return
     mainWindow?.show()
@@ -416,6 +465,11 @@ app.whenReady().then(async () => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // 换屏/改分辨率后底色必须跟上，否则色温一直是另一块屏的
+  screen.on('display-metrics-changed', () => refreshWallpaperSoon(0))
+  screen.on('display-added', () => refreshWallpaperSoon(0))
+  screen.on('display-removed', () => refreshWallpaperSoon(0))
+
   protocol.handle('appicon', async (request) => {
     const url = new URL(request.url)
     const name = decodeURIComponent(url.pathname.slice(1) || url.host)
@@ -428,7 +482,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('apps:scan', async (e, force = false) => {
     if (force) await clearIconCache()
     const sender = e.sender
+    // 每个应用一条 IPC 会把渲染层打成几百次重渲染，进度条按 10 帧/秒发就够看了
+    let lastSend = 0
     const list = await scanApps((done, total) => {
+      const now = Date.now()
+      if (now - lastSend < 100 && done !== total) return
+      lastSend = now
       sender.send('apps:progress', { done, total })
     })
     await writeTextAtomic(L().appsCacheFile, JSON.stringify(list)).catch(() => undefined)
@@ -572,7 +631,7 @@ app.whenReady().then(async () => {
       orphan = []
       try {
         for (const e of await fs.readdir(d.iconsDir, { withFileTypes: true })) {
-          if (!e.isFile() || used.has(e.name)) continue
+          if (!e.isFile() || !e.name.endsWith('.png') || used.has(e.name)) continue
           orphan.push(e.name)
           orphanBytes += await statSize(join(d.iconsDir, e.name))
         }

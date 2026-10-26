@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import type { JSX, DragEvent } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
+import type { JSX, DragEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { t } from './i18n'
 
 export interface DockApp {
@@ -22,7 +22,7 @@ interface Props {
 const BASE = 48
 const GAP = 8
 
-export default function Dock({
+function Dock({
   items,
   draggingLnk,
   magnify,
@@ -37,13 +37,46 @@ export default function Dock({
   const [mouseX, setMouseX] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
+  /**
+   * 槽位中心点只在"静止布局"下量一次。
+   * 原来每次 mousemove 对每个槽调 getBoundingClientRect()：读几何紧接写 width/height，
+   * 浏览器每帧被迫重排整条 Dock，鼠标一动就掉帧。
+   */
+  const centers = useRef<number[]>([])
+  const dirty = useRef(true)
+  const raf = useRef(0)
+  const pendingX = useRef<number | null>(null)
+
+  const measure = (): void => {
+    const bar = barRef.current
+    // 窗口隐藏时几何全是 0，量了会把放大镜算成"全部同一点"
+    if (!bar || bar.clientWidth === 0) return
+    const next: number[] = []
+    for (let i = 0; i < items.length; i++) {
+      const el = slotRefs.current[i]
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      next.push(r.left + r.width / 2)
+    }
+    centers.current = next
+  }
+
+  useEffect(() => {
+    dirty.current = true
+  }, [items.length, magnify])
+
+  useEffect(() => {
+    const onResize = (): void => {
+      dirty.current = true
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const scaleFor = (i: number): number => {
     if (!magnify || mouseX === null) return 1
-    const el = slotRefs.current[i]
-    if (!el) return 1
-    const rect = el.getBoundingClientRect()
-    const center = rect.left + rect.width / 2
+    const center = centers.current[i]
+    if (center === undefined) return 1
     const d = Math.abs(mouseX - center)
     return 1 + 0.55 * Math.exp(-((d / 110) ** 2))
   }
@@ -80,12 +113,36 @@ export default function Dock({
     }
   }
 
+  // 一帧最多算一次放大镜，鼠标事件再密也不叠加
+  const onMouseMove = (e: ReactMouseEvent<HTMLDivElement>): void => {
+    pendingX.current = e.clientX
+    if (raf.current) return
+    raf.current = requestAnimationFrame(() => {
+      raf.current = 0
+      if (dirty.current) {
+        dirty.current = false
+        measure()
+      }
+      setMouseX(pendingX.current)
+    })
+  }
+
+  useEffect(
+    () => () => {
+      if (raf.current) cancelAnimationFrame(raf.current)
+    },
+    []
+  )
+
   return (
     <div
       ref={barRef}
       className={`dock${dragOver ? ' drag-over' : ''}`}
-      onMouseMove={(e) => setMouseX(e.clientX)}
-      onMouseLeave={() => setMouseX(null)}
+      onMouseMove={onMouseMove}
+      onMouseLeave={() => {
+        setMouseX(null)
+        dirty.current = true
+      }}
       onDragOver={(e) => {
         e.preventDefault()
         setDragOver(!hasDockDrag(e))
@@ -151,3 +208,5 @@ export default function Dock({
     </div>
   )
 }
+
+export default memo(Dock)
